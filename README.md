@@ -11,6 +11,19 @@ This document serves as both the specification and implementation plan, validate
 
 ---
 
+## Borrowed Standards and Profiles (Minimal)
+
+Locks intentionally reuses proven standards where they reduce interop bugs without changing the Pubky model:
+
+- JSON canonicalization: JCS ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)) for all signed JSON objects.
+- Optional future binary profile (not MVP): deterministic CBOR ([RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) Section 4.2) with COSE ([RFC 9052](https://www.rfc-editor.org/rfc/rfc9052)).
+
+Locks also supports optional *grant profiles* for advanced delegation in later phases:
+- Core: UnlockGrant (JSON+JCS, signed with Pubky/Ed25519).
+- Optional (Phase 5): serialize UnlockGrant semantics into Biscuit or [UCAN](https://ucan.xyz/delegation/)-style delegation/invocation formats when delegation/attenuation is required.
+
+---
+
 ## What Pubky Locks Does
 
 Locks is **NOT** a payment protocol. It doesn't process funds. It only **verifies proofs** that payments (or other conditions) were satisfied, then issues short-lived access grants.
@@ -269,14 +282,15 @@ All cryptographic operations use domain-separated prefixes per PUBKY_CRYPTO_SPEC
 
 ### Canonical Encoding (v1)
 
-For MVP, use JSON with strict rules:
+For v1, all signed JSON objects (LockPolicy, ProofBundle, UnlockGrant, tag credentials, revocations) MUST be canonicalized using the JSON Canonicalization Scheme (JCS), [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785).
 
-- Keys sorted alphabetically
-- No floats (integers or strings only)
-- Byte arrays as base64url (no padding)
-- Signatures as raw 64-byte base64url (no `ed25519:` prefix)
+Additional Locks v1 constraints:
+- Floats MUST NOT appear (integers or strings only).
+- Byte arrays MUST be encoded as base64url (no padding).
+- Signatures MUST be raw 64-byte Ed25519 signatures encoded as base64url (no `ed25519:` prefix).
+- Unknown fields in signed objects MUST be rejected unless explicitly allowed by the schema.
 
-Future versions may migrate to Deterministic CBOR per RFC 8949.
+Future versions MAY introduce a binary wire format using deterministically encoded CBOR ([RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) Section 4.2) with COSE for signing/encryption ([RFC 9052](https://www.rfc-editor.org/rfc/rfc9052)), but JSON+JCS is the source of truth for v1.
 
 ### Identifier Formats
 
@@ -393,7 +407,7 @@ Create new crate at `pubky-locks/` with modules:
 - `verifiers/mod.rs` - Verifier registry and trait
 - `verifiers/payment.rs` - PaymentVerifier (wraps paykit-interactive)
 - `verifiers/password.rs` - PasswordVerifier (argon2id)
-- `encoding.rs` - JCS canonical encoding
+- `encoding.rs` - RFC 8785 JCS canonicalization + shared encode/decode helpers
 - `error.rs` - Error types including structured verification failures
 
 ### 1.2 Define Core Schemas
@@ -540,6 +554,8 @@ Content-Type: application/json
   "policy_url": "/pub/pubky.app/locks/policies/{lock_id}.json"
 }
 ```
+
+Note: `402 Payment Required` is the HTTP transport mapping used by pubky-homeserver; the Locks protocol itself is transport-agnostic and only requires a structured "locked" response containing `lock_id` and a policy reference.
 
 **Grant Verification Middleware**:
 
@@ -789,6 +805,14 @@ For subscription content:
 - Policy can allowlist external verifiers
 - Verifier signs facts that are included in grant
 
+### 5.4 UCAN Profile (Optional, Not MVP)
+
+[UCAN](https://ucan.xyz/delegation/) can be supported as an optional profile for advanced delegation and invocation semantics (marketplaces, affiliates), without changing the Locks core primitives.
+
+- UnlockGrant remains the core semantic object.
+- A UCAN profile MAY encode equivalent delegation and an invocation-style PoP flow for requests.
+- This is explicitly out of scope for MVP and only considered if/when delegation requirements exceed the simple UnlockGrant model.
+
 ---
 
 ## Integration Points
@@ -825,6 +849,7 @@ From master plan Section 14:
 - Test vectors for logic_ast evaluation
 - Fuzz parsers for logic_ast and schema validation
 - Strict unknown field rejection tests
+- Test vectors proving RFC 8785 JCS canonicalization produces identical bytes across implementations before signing/verifying
 
 **Test Vector Format** (matching PUBKY_CRYPTO_SPEC style):
 
