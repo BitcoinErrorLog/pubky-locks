@@ -263,21 +263,13 @@ This approach:
 All cryptographic operations use domain-separated prefixes per PUBKY_CRYPTO_SPEC Appendix A:
 
 | Operation | Domain String |
-
 |-----------|---------------|
-
 | LockPolicy signature | `"pubky-locks/policy/v1"` |
-
 | ProofBundle signature | `"pubky-locks/proof-bundle/v1"` |
-
 | UnlockGrant signature | `"pubky-locks/grant/v1"` |
-
 | Receipt lock_commitment | `"pubky-locks/receipt-bind/v1"` |
-
 | Policy hash | `"pubky-locks/policy-hash/v1"` |
-
 | PoP request binding | `"pubky-locks/pop/v1"` |
-
 | Content-key AAD | `"pubky-locks/content-key/v1:"` |
 
 ### Canonical Encoding (v1)
@@ -295,15 +287,10 @@ Future versions MAY introduce a binary wire format using deterministically encod
 ### Identifier Formats
 
 | Identifier | Format | Example |
-
 |------------|--------|---------|
-
 | lock_id | 32 random bytes, z-base-32 display | `8um71us...` (52 chars) |
-
 | grant_id | 32 random bytes, z-base-32 display | `tj1igr...` (52 chars) |
-
 | policy_hash | SHA256, hex display | `sha256:abc123...` |
-
 | kid | first 16 bytes of SHA256(pubkey), hex | `abc123...def456` (32 chars) |
 
 ---
@@ -311,29 +298,17 @@ Future versions MAY introduce a binary wire format using deterministically encod
 ## Error Code Taxonomy
 
 | Code | Category | Description |
-
 |------|----------|-------------|
-
 | E001 | Policy | Invalid policy signature |
-
 | E002 | Policy | Policy expired |
-
 | E003 | Policy | Unknown criterion type |
-
 | E010 | Proof | Invalid proof bundle signature |
-
 | E011 | Proof | Criterion verification failed |
-
 | E012 | Proof | Receipt replay detected |
-
 | E013 | Proof | Receipt binding mismatch |
-
 | E020 | Grant | Grant expired |
-
 | E021 | Grant | Grant issuer not authorized |
-
 | E022 | Grant | PoP signature invalid |
-
 | E030 | Rate | Rate limit exceeded |
 
 ---
@@ -341,13 +316,9 @@ Future versions MAY introduce a binary wire format using deterministically encod
 ## Storage Path Conventions
 
 | Object | Path | Owner |
-
 |--------|------|-------|
-
 | LockPolicy | `/pub/pubky.app/locks/policies/{lock_id}.json` | Creator |
-
 | Revocation List | `/pub/pubky.app/locks/revocations.json` | Creator |
-
 | Audit Log | `/priv/pubky.app/locks/audit/{lock_id}.jsonl` | Creator (private) |
 
 ---
@@ -508,15 +479,10 @@ pub struct LocksReceiptMetadata {
 **Rate Limit Defaults**:
 
 | Lock Type | Limit | Window | Lockout |
-
 |-----------|-------|--------|---------|
-
 | Password | 5 attempts | 15 min | 1 hour |
-
 | Puzzle | 10 attempts | 1 min | 5 min |
-
 | Payment | No limit | - | - |
-
 | Tag | No limit | - | - |
 
 ### 1.6 Implement Logic AST Evaluator
@@ -818,23 +784,14 @@ For subscription content:
 ## Integration Points
 
 | Component | Existing Code | Integration |
-
 |-----------|---------------|-------------|
-
 | PaymentVerifier | `paykit-interactive/src/proof/mod.rs` | Wrap ProofVerifierRegistry |
-
 | LocksReceiptMetadata | `paykit-interactive/src/lib.rs:33` (metadata field) | Add locks schema |
-
 | Sealed Blob | `pubky-noise/src/sealed_blob.rs` | Use for content-key encryption |
-
 | KDF | `pubky-noise/src/kdf.rs` | Follow HKDF patterns |
-
 | Signing | `paykit-subscriptions/src/signing.rs` | Follow Ed25519 patterns |
-
 | Noise sessions | `pubky-noise/src/client.rs`, `server.rs` | Use for key delivery |
-
 | Homeserver routes | `pubky-core/pubky-homeserver/src/client_server/routes/` | Add locks endpoints |
-
 | App services | `pubky-app/src/services/` (example) | Add locksService (pattern for any Locks-compatible app) |
 
 ---
