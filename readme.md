@@ -155,9 +155,85 @@ Both responses include the policy URI in a `Link: <policy-uri>; rel="lock-policy
 
 ---
 
-## 5. Core objects
+## 5. Cryptographic conventions
 
-All signed objects use JCS (RFC 8785) for canonical JSON serialization. Signatures are raw 64-byte Ed25519, base64url-encoded. No floats. Unknown fields are rejected in v1 unless the field name starts with `x_` (extension namespace).
+### 5.1 Canonical encoding (v1)
+
+All signed JSON objects (LockPolicy, ProofBundle, UnlockGrant, tag credentials, revocations) MUST be canonicalized using the JSON Canonicalization Scheme (JCS), [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785).
+
+Additional v1 constraints:
+
+- Floats MUST NOT appear (integers or strings only)
+- Byte arrays MUST be encoded as base64url (no padding)
+- Signatures MUST be raw 64-byte Ed25519, base64url-encoded
+- Unknown fields in signed objects MUST be rejected unless the field name starts with `x_` (extension namespace)
+
+Future versions MAY introduce a binary wire format using deterministically encoded CBOR ([RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html) Section 4.2) with COSE ([RFC 9052](https://www.rfc-editor.org/rfc/rfc9052)), but JSON+JCS is the canonical format for v1.
+
+### 5.2 Domain separation constants
+
+All cryptographic operations use domain-separated prefixes per PUBKY_CRYPTO_SPEC Appendix A:
+
+| Operation | Domain String |
+|-----------|---------------|
+| LockPolicy signature | `"pubky-locks/policy/v1"` |
+| ProofBundle signature | `"pubky-locks/proof-bundle/v1"` |
+| UnlockGrant signature | `"pubky-locks/grant/v1"` |
+| Lock commitment | `"pubky-locks-v1:payment"` (as `domain` field in JCS commitment object) |
+| Idempotency key | `"pubky-locks-v1:idempotency"` (as `domain` field in JCS idempotency object) |
+| Policy hash | `"pubky-locks/policy-hash/v1"` |
+| PoP request binding | `"pubky-locks/pop/v1"` |
+| Content-key AAD (Phase 4) | `"pubky-locks/content-key/v1:"` |
+
+### 5.3 Identifier formats
+
+| Identifier | Format | Length | Example |
+|------------|--------|--------|---------|
+| `lock_id` | 16 random bytes, base64url | 22 chars | `8um71usABc...` |
+| `grant_id` | 16 random bytes, base64url | 22 chars | `tj1igrXyz...` |
+| `policy_hash` | SHA256, prefixed | variable | `sha256:<base64url>` |
+| `cert_id` | first 16 bytes of SHA256(cert_body), hex | 32 chars | `abc123...def456` |
+| pubkey display | z-base-32 Ed25519 | 52 chars | `pk:<z32>` |
+
+---
+
+## 6. Architecture overview
+
+```mermaid
+flowchart TB
+    subgraph LayerB [Layer B: Confidentiality - Deferred]
+        Cryptrees[Cryptrees]
+        KeyRegression[Key Regression]
+        EnvelopeEnc[Envelope Encryption]
+    end
+
+    subgraph LayerA [Layer A: Authorization - Locks Core]
+        LockPolicy[LockPolicy]
+        ProofBundle[ProofBundle]
+        Verifiers[Verifier Registry]
+        UnlockGrant[UnlockGrant]
+
+        LockPolicy --> Verifiers
+        ProofBundle --> Verifiers
+        Verifiers --> UnlockGrant
+    end
+
+    UnlockGrant -->|carries key material| LayerB
+
+    subgraph External [External Systems]
+        Wallet[Paykit-Compatible Wallet]
+        Paykit[Paykit Receipts]
+        App[Locks-Compatible App]
+    end
+
+    Wallet -->|generates| Paykit
+    Paykit -->|proof in| ProofBundle
+    UnlockGrant -->|access to| App
+```
+
+---
+
+## 7. Core objects
 
 ### 5.1 LockPolicy
 
@@ -315,7 +391,7 @@ The viewer's submission of proofs to the homeserver.
 }
 ```
 
-The receipt follows the Paykit receipt format (BIP-Paykit Section "Receipt Format" and "Payment Proofs"). The `lock_commitment` field is a Locks-specific extension — see section 7.
+The receipt follows the Paykit receipt format (BIP-Paykit Section "Receipt Format" and "Payment Proofs"). The `lock_commitment` field is a Locks-specific extension — see section 9.
 
 #### 5.2.2 Password proof
 
@@ -344,7 +420,7 @@ The homeserver's response after successful verification.
 | `issued_at` | integer | yes | Unix timestamp (seconds) |
 | `expires_at` | integer | yes | Unix timestamp (seconds). `issued_at + grant_ttl_sec` from policy. |
 | `policy_hash` | string | yes | `sha256:<base64url>` of the JCS-canonical LockPolicy (excluding `sig`). Binds the grant to the exact policy version. |
-| `idempotency_key` | string | no | `sha256:<base64url>` per section 7.2. Present for payment grants. Absent for password grants. |
+| `idempotency_key` | string | no | `sha256:<base64url>` per section 9.2. Present for payment grants. Absent for password grants. |
 | `issuer` | string | yes | Signing key pubkey. This is the homeserver's delegated AppKey, not the creator's RootKey. `pk:<z32>` |
 | `issuer_cert_id` | string | yes | The `cert_id` linking this AppKey to the creator's RootKey via AppCert. `<hex>` |
 | `sig` | string | yes | Ed25519 signature by the AppKey over the JCS-canonical form (excluding `sig` field) |
@@ -496,7 +572,7 @@ lock_commitment = SHA256(JCS(commitment_object))
 
 Using JCS ensures deterministic serialization across languages and platforms. The `domain` field provides domain separation. All fields are strings. The canonical JSON key ordering is alphabetical per JCS, making the construction unambiguous without manual field-ordering rules.
 
-The wallet computes this from the payment request (section 9) and includes it as `receipt.metadata.lock_commitment` (base64url-encoded). The homeserver recomputes it from the policy and verifies it matches.
+The wallet computes this from the payment request (section 11) and includes it as `receipt.metadata.lock_commitment` (base64url-encoded). The homeserver recomputes it from the policy and verifies it matches.
 
 If the receipt lacks a `lock_commitment`, the homeserver MAY accept it in v1 for backward compatibility with wallets that have not yet implemented Locks-aware receipts. This leniency MUST be removed in v2.
 
@@ -525,13 +601,23 @@ Behavior on duplicate submission:
 
 ### 7.3 Rate limiting
 
-The homeserver MUST rate-limit the verify endpoint:
+The homeserver MUST rate-limit the verify endpoint per (lock_id, viewer) pair:
 
-- Per viewer key: max 10 attempts per minute per lock
+| Lock Type | Limit | Window | Lockout |
+|-----------|-------|--------|---------|
+| Payment | No limit | - | - |
+| Tag/membership | No limit | - | - |
+| Password | 5 attempts | 15 min | 1 hour |
+| Puzzle (v3) | 10 attempts | 1 min | 5 min |
+
+Global limits also apply:
+
 - Per resource: max 100 attempts per minute across all viewers
 - On rate limit: return `RATE_LIMITED` error with `Retry-After` header
 
-Password locks SHOULD have stricter limits (max 5 attempts per minute) to resist online brute-force.
+### 7.4 No atomic payment-delivery guarantee
+
+The system is best-effort, not atomic. The viewer pays first, then receives a grant. If the homeserver crashes between payment receipt and grant issuance, the viewer must retry. Idempotency ensures the same receipt returns the same grant — the viewer is never charged twice. But the window between payment and grant issuance is a known gap, not a bug. Apps should handle this gracefully: save the receipt locally before submitting the proof, so the receipt survives app or server failure.
 
 ---
 
@@ -552,7 +638,7 @@ For Pubky App v1, the suggested paths are:
 | Audit log | `/priv/<app-id>/locks/audit/<lock_id>.jsonl` | Private (creator only) |
 | Password store | Homeserver internal DB | Never exposed |
 
-These are implementation paths for Pubky App, not protocol identity. Other apps building on Locks use their own path conventions. The protocol boundary is the API (section 10), not the filesystem.
+These are implementation paths for Pubky App, not protocol identity. Other apps building on Locks use their own path conventions. The protocol boundary is the API (section 12), not the filesystem.
 
 ### 8.2 Indexer behavior
 
@@ -675,7 +761,7 @@ Content-Type: application/json
 }
 ```
 
-**Response:** See section 5.5.
+**Response:** See section 7.5.
 
 ### 10.4 Refresh grant
 
@@ -885,7 +971,7 @@ The payment verifier requires these fields from the Paykit receipt (per BIP-Payk
 | `asset` | Must match `criterion.asset` (v1: only `BTC` is validated, per BIP 177) |
 | `created_at` | Must be within `criterion.receipt_window_sec` of current time |
 | `proof.type` | Must be `"lightning_preimage"` or `"bitcoin_txid"` |
-| `metadata.lock_commitment` | Must match recomputed commitment (section 7.1). Optional in v1. |
+| `metadata.lock_commitment` | Must match recomputed commitment (section 9.1). Optional in v1. |
 
 ### 13.2 Lightning receipt verification
 
