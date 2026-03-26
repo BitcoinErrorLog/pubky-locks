@@ -235,7 +235,7 @@ flowchart TB
 
 ## 7. Core objects
 
-### 5.1 LockPolicy
+### 7.1 LockPolicy
 
 The creator-signed policy on a resource. Signed by the creator's content AppKey (not the RootKey -- see section 3, delegation model).
 
@@ -255,11 +255,11 @@ The creator-signed policy on a resource. Signed by the creator's content AppKey 
 | `expires_at` | integer | no | Policy expiration. Null means indefinite. |
 | `signer` | string | yes | Content AppKey pubkey that produced `sig`. `pk:<z32>` |
 | `signer_cert_id` | string | yes | The `cert_id` linking this AppKey to the creator's RootKey via AppCert. `<hex>` |
-| `sig` | string | yes | Ed25519 signature by the content AppKey over the JCS-canonical form (excluding `sig`, `signer`, and `signer_cert_id` fields) |
+| `sig` | string | yes | Ed25519 signature by the content AppKey over the JCS-canonical form (excluding only the `sig` field itself) |
 
 Verifiers trace the delegation chain: fetch the creator's KeyBinding for the relevant `app_id`, confirm the `signer` key appears in `app_keys[]`, fetch the AppCert by `signer_cert_id`, verify the AppCert is signed by the `creator` RootKey, then verify `sig` against the `signer` key.
 
-#### 5.1.1 Criteria
+#### 7.1.1 Criteria
 
 Each criterion defines one condition that can be satisfied by a proof.
 
@@ -324,7 +324,7 @@ The creator sets the password via authenticated homeserver API. The homeserver s
 
 The resource unlocks for everyone once cumulative contributions reach the threshold. Progress is public (total collected vs threshold). Individual contribution amounts are not disclosed.
 
-#### 5.1.2 Logic tree
+#### 7.1.2 Logic tree
 
 The logic tree combines criteria using boolean operators. v1 supports `ANY` (OR) and `ALL` (AND). Max depth: 2 levels. Max criteria: 8.
 
@@ -352,7 +352,7 @@ Nested example (v2):
 
 `ref` values must match a `criterion.id`. A logic tree referencing an undefined criterion is invalid.
 
-### 5.2 ProofBundle
+### 7.2 ProofBundle
 
 The viewer's submission of proofs to the homeserver.
 
@@ -362,12 +362,11 @@ The viewer's submission of proofs to the homeserver.
 | `lock_id` | string | yes | Must match the policy |
 | `resource` | string | yes | Must match the policy |
 | `viewer` | string | yes | Viewer's pubkey. `pk:<z32>` |
-| `proofs` | array | yes | Proof objects (see 5.2.1) |
-| `challenge_response` | string | no | Response to server-issued challenge (for password locks) |
+| `proofs` | array | yes | Proof objects (see 7.2.1) |
 | `client_time` | integer | yes | Viewer's claimed Unix timestamp (seconds). Homeserver MAY reject if clock skew > 300s. |
 | `sig` | string | yes | Viewer's Ed25519 signature over the JCS-canonical form (excluding `sig` field) |
 
-#### 5.2.1 Payment proof
+#### 7.2.1 Payment proof
 
 ```json
 {
@@ -381,7 +380,13 @@ The viewer's submission of proofs to the homeserver.
     "amount": "50000",
     "asset": "BTC",
     "created_at": 1769500000,
-    "lock_commitment": "<base64url>",
+    "metadata": {
+      "locks": {
+        "lock_id": "<lock_id>",
+        "resource": "pubky://<z32>/pub/...",
+        "lock_commitment": "<base64url>"
+      }
+    },
     "proof": {
       "type": "lightning_preimage",
       "preimage": "<hex>",
@@ -391,9 +396,9 @@ The viewer's submission of proofs to the homeserver.
 }
 ```
 
-The receipt follows the Paykit receipt format (BIP-Paykit Section "Receipt Format" and "Payment Proofs"). The `lock_commitment` field is a Locks-specific extension -- see section 9.
+The receipt follows the Paykit receipt format (BIP-Paykit Section "Receipt Format" and "Payment Proofs"). The receipt's `metadata.locks` object contains the Locks-specific extension fields. See section 9 for lock commitment construction.
 
-#### 5.2.2 Password proof
+#### 7.2.2 Password proof
 
 ```json
 {
@@ -404,7 +409,7 @@ The receipt follows the Paykit receipt format (BIP-Paykit Section "Receipt Forma
 }
 ```
 
-### 5.3 UnlockGrant
+### 7.3 UnlockGrant
 
 The homeserver's response after successful verification.
 
@@ -425,7 +430,7 @@ The homeserver's response after successful verification.
 | `issuer_cert_id` | string | yes | The `cert_id` linking this AppKey to the creator's RootKey via AppCert. `<hex>` |
 | `sig` | string | yes | Ed25519 signature by the AppKey over the JCS-canonical form (excluding `sig` field) |
 
-### 5.4 Grant presentation (Proof of Possession)
+### 7.4 Grant presentation (Proof of Possession)
 
 When `mode` is `"pop"`, the viewer must prove they control the `subject` key when presenting the grant. The presentation is an HTTP header:
 
@@ -453,7 +458,7 @@ Where `sig` is the viewer's Ed25519 signature over the JCS-canonical form of the
 
 When `mode` is `"bearer"`, the `Authorization` header alone is sufficient. Bearer mode is acceptable only for low-value content where grant sharing is tolerable.
 
-### 5.5 Verify response
+### 7.5 Verify response
 
 **Success:**
 
@@ -489,7 +494,7 @@ When `mode` is `"bearer"`, the `Authorization` header alone is sufficient. Beare
 | `INVALID_SIGNATURE` | ProofBundle signature invalid |
 | `VERIFICATION_FAILED` | One or more proofs failed verification |
 | `RECEIPT_EXPIRED` | Payment receipt outside `receipt_window_sec` |
-| `RECEIPT_REPLAY` | Receipt already used (idempotency hit -- returns existing grant) |
+| `RECEIPT_REPLAY` | Receipt already used -- not emitted as an error. Server returns `status: "ok"` with the existing or refreshed grant. Listed here for internal classification only. |
 | `RECEIPT_AMOUNT_MISMATCH` | Receipt amount does not match criterion |
 | `RECEIPT_MERCHANT_MISMATCH` | Receipt payee does not match criterion merchant |
 | `COMMITMENT_MISMATCH` | Receipt `lock_commitment` does not match expected value |
@@ -503,11 +508,11 @@ On `RECEIPT_REPLAY`, the homeserver returns the original grant (or a refreshed g
 
 ---
 
-## 6. Discovery signaling
+## 8. Discovery signaling
 
 Locked content must be discoverable. The lock itself is a signal of value.
 
-### 6.1 Resource-level lock metadata
+### 8.1 Resource-level lock metadata
 
 When a creator attaches a lock to a resource, the resource's public metadata includes a lock signal:
 
@@ -530,7 +535,7 @@ This object is small enough to inline in a post's metadata without bloating feed
 - Display price information
 - Enable "locked content" discovery feeds
 
-### 6.2 Preview and payload separation
+### 8.2 Preview and payload separation
 
 Following the pattern from Fanfares: locked resources should separate preview content from guarded content as distinct objects.
 
@@ -545,9 +550,9 @@ Implementation: the app stores preview data at the resource's public path and gu
 
 ---
 
-## 7. Receipt binding and replay control
+## 9. Receipt binding and replay control
 
-### 7.1 Lock commitment
+### 9.1 Lock commitment
 
 When a wallet pays a Locks-initiated payment, it embeds a `lock_commitment` in the Paykit receipt metadata. This binds the receipt to a specific lock and prevents cross-lock replay.
 
@@ -576,7 +581,7 @@ The wallet computes this from the payment request (section 11) and includes it a
 
 If the receipt lacks a `lock_commitment`, the homeserver MAY accept it in v1 for backward compatibility with wallets that have not yet implemented Locks-aware receipts. This leniency MUST be removed in v2.
 
-### 7.2 Idempotency
+### 9.2 Idempotency
 
 Idempotency is primarily a concern for **payment proofs**, where double-charging is unacceptable.
 
@@ -599,7 +604,7 @@ Behavior on duplicate submission:
 
 **Password locks do not need payment-style idempotency.** There is no financial cost to re-verifying a password. The homeserver simply checks whether the viewer already has an active grant for this lock before requiring a new challenge-response. If an active grant exists, return it. If not, issue a new challenge. No idempotency store entry is needed for password proofs.
 
-### 7.3 Rate limiting
+### 9.3 Rate limiting
 
 The homeserver MUST rate-limit the verify endpoint per (lock_id, viewer) pair:
 
@@ -615,15 +620,15 @@ Global limits also apply:
 - Per resource: max 100 attempts per minute across all viewers
 - On rate limit: return `RATE_LIMITED` error with `Retry-After` header
 
-### 7.4 No atomic payment-delivery guarantee
+### 9.4 No atomic payment-delivery guarantee
 
 The system is best-effort, not atomic. The viewer pays first, then receives a grant. If the homeserver crashes between payment receipt and grant issuance, the viewer must retry. Idempotency ensures the same receipt returns the same grant -- the viewer is never charged twice. But the window between payment and grant issuance is a known gap, not a bug. Apps should handle this gracefully: save the receipt locally before submitting the proof, so the receipt survives app or server failure.
 
 ---
 
-## 8. Storage model
+## 10. Storage model
 
-### 8.1 Protocol vs implementation
+### 10.1 Protocol vs implementation
 
 The Locks protocol defines object shapes, verification rules, and API contracts. It does NOT prescribe storage paths. Storage paths are implementation details that vary by app.
 
@@ -640,7 +645,7 @@ For Pubky App v1, the suggested paths are:
 
 These are implementation paths for Pubky App, not protocol identity. Other apps building on Locks use their own path conventions. The protocol boundary is the API (section 12), not the filesystem.
 
-### 8.2 Indexer behavior
+### 10.2 Indexer behavior
 
 Indexers (Nexus) MAY index:
 
@@ -658,9 +663,9 @@ Indexers MUST NOT index:
 
 ---
 
-## 9. Wallet integration
+## 11. Wallet integration
 
-### 9.1 Payment request
+### 11.1 Payment request
 
 When a viewer needs to pay to unlock, the app constructs a payment request and hands it to the wallet via deep link:
 
@@ -690,7 +695,7 @@ For requests that would exceed URL length limits (unlikely for v1 but possible w
 bitkit://pay?locks_ref=pubky://<z32>/pub/<app-id>/locks/requests/<request_id>.json
 ```
 
-### 9.2 Wallet responsibilities
+### 11.2 Wallet responsibilities
 
 The wallet (Bitkit or any Paykit-compatible wallet):
 
@@ -701,7 +706,7 @@ The wallet (Bitkit or any Paykit-compatible wallet):
 5. Includes `lock_commitment` in `receipt.metadata` when the request contains a `lock_id`
 6. Returns the receipt to the requesting app via the callback URI
 
-### 9.3 Receipt return
+### 11.3 Receipt return
 
 The wallet calls back to the app with:
 
@@ -711,17 +716,17 @@ The wallet calls back to the app with:
 
 The app then constructs a ProofBundle and submits it to the homeserver's verify endpoint.
 
-### 9.4 Wallet-agnostic design
+### 11.4 Wallet-agnostic design
 
 The deep link scheme (`bitkit://pay`) is Bitkit-specific. Other wallets register their own schemes. The payment request format is wallet-agnostic. Apps SHOULD support multiple wallet schemes and let the user choose. The app discovers installed wallets by attempting scheme resolution or by checking a wallet registry published by the user at `/pub/paykit.app/v0/wallet-preference`.
 
 ---
 
-## 10. API
+## 12. API
 
 All Locks API endpoints live under `/.well-known/locks/` on the creator's homeserver. This is a service endpoint, not a data path.
 
-### 10.1 Get policy
+### 12.1 Get policy
 
 ```
 GET /.well-known/locks/policy?resource=<pubky-uri>
@@ -733,7 +738,7 @@ GET /.well-known/locks/policy?resource=<pubky-uri>
 - `404` if no lock exists for this resource
 - `410` if the lock or resource has been removed
 
-### 10.2 Get challenge (for password locks)
+### 12.2 Get challenge (for password locks)
 
 ```
 GET /.well-known/locks/challenge?lock_id=<lock_id>
@@ -750,7 +755,7 @@ GET /.well-known/locks/challenge?lock_id=<lock_id>
 
 Nonce TTL: 300 seconds. One-time use.
 
-### 10.3 Verify
+### 12.3 Verify
 
 ```
 POST /.well-known/locks/verify
@@ -763,7 +768,7 @@ Content-Type: application/json
 
 **Response:** See section 7.5.
 
-### 10.4 Refresh grant
+### 12.4 Refresh grant
 
 ```
 POST /.well-known/locks/refresh
@@ -785,7 +790,7 @@ Where `sig` is the viewer's Ed25519 signature over `JCS({"grant_id": "...", "tim
 
 Refresh is allowed as long as the underlying policy has not changed (same `policy_hash`). If the creator updates the policy, existing grants cannot be refreshed -- the viewer must re-verify.
 
-### 10.5 Access guarded resource
+### 12.5 Access guarded resource
 
 ```
 GET /pub/<app-id>/posts/<id>/payload.json
@@ -799,7 +804,7 @@ X-Pubky-Grant-Pop: <base64url-pop>
 - `402` if no valid grant and at least one criterion is `payment` or `crowdwall` (includes `Link: <policy-uri>; rel="lock-policy"`)
 - `403` if no valid grant and the lock is non-payment (password, tag, etc.), or if a grant is presented but PoP is invalid or grant expired (includes `Link: <policy-uri>; rel="lock-policy"`)
 
-### 10.6 Creator endpoints
+### 12.6 Creator endpoints
 
 These require authenticated homeserver sessions (existing Pubky auth).
 
@@ -845,9 +850,9 @@ POST /.well-known/locks/tags/revoke
 
 ---
 
-## 11. UX model
+## 13. UX model
 
-### 11.1 Viewer experience
+### 13.1 Viewer experience
 
 Locked content is visible in feeds and search. The lock indicator shows the lock type and price. Tapping a locked resource opens an unlock modal:
 
@@ -857,7 +862,7 @@ Locked content is visible in feeds and search. The lock indicator shows the lock
 
 The entire unlock flow should complete in under 10 seconds for Lightning payments. If it takes longer, the UX is broken.
 
-### 11.2 Creator experience
+### 13.2 Creator experience
 
 A creator locks content through the app's publish flow:
 
@@ -872,17 +877,17 @@ A creator locks content through the app's publish flow:
 
 A `lock_id` is immutable per lock instance. Edits fall into two categories:
 
-- **Material edits** (changes to `criteria`, `logic`, `grant_issuers`, `grant_mode`, or `grant_ttl_sec`) create a **new lock instance** with a new `lock_id`. The old lock is removed. Existing grants for the old policy cannot be refreshed and expire naturally. Receipts bound to the old `lock_id` via `lock_commitment` cannot satisfy the new lock -- viewers with valid payment receipts can re-verify because idempotency is keyed on `lock_id || viewer || receipt_hash`, and the new `lock_id` produces a new idempotency key, but the `lock_commitment` will not match. In practice, material edits to paid locks should be rare.
+- **Material edits** (changes to `criteria`, `logic`, `grant_issuers`, `grant_mode`, or `grant_ttl_sec`) create a **new lock instance** with a new `lock_id`. The old lock is removed. Existing grants for the old policy cannot be refreshed and expire naturally. Old receipts cannot satisfy the new lock -- they are bound to the old `lock_id` via `lock_commitment`, and the new `lock_id` produces a different commitment. The viewer must pay again for the new lock. Creators should avoid material edits to paid locks. If grandfathering is needed (honoring old receipts after a policy change), that is application logic, not protocol logic.
 - **Non-material edits** (changes to `preview`, `expires_at`, or extension fields) update the policy **in place** with the same `lock_id`. The `policy_hash` changes, so grant refresh will fail until viewers re-verify, but no new `lock_id` is needed and existing receipts remain valid.
 
-### 11.3 Grant lifecycle
+### 13.3 Grant lifecycle
 
 - Apps cache active grants locally (encrypted local storage)
 - Apps attempt grant refresh at 80% of TTL
 - On refresh failure, the app prompts the viewer to re-verify (which is free for idempotent receipts)
 - On app reinstall, the viewer can import receipts to re-obtain grants without repaying
 
-### 11.4 Default TTLs
+### 13.4 Default TTLs
 
 | Lock type | Default grant TTL | Rationale |
 |-----------|------------------|-----------|
@@ -895,7 +900,7 @@ Creators can override these defaults in the policy via `grant_ttl_sec`.
 
 ---
 
-## 12. Proof types and phased rollout
+## 14. Proof types and phased rollout
 
 ### Phase 1: MVP (Q2 2026)
 
@@ -956,11 +961,11 @@ Explore:
 
 ---
 
-## 13. Paykit receipt verification
+## 15. Paykit receipt verification
 
 This section defines exactly how the homeserver's payment verifier validates a Paykit receipt. This is the critical integration point between Locks and Paykit.
 
-### 13.1 Required receipt fields
+### 15.1 Required receipt fields
 
 The payment verifier requires these fields from the Paykit receipt (per BIP-Paykit):
 
@@ -973,7 +978,7 @@ The payment verifier requires these fields from the Paykit receipt (per BIP-Payk
 | `proof.type` | Must be `"lightning_preimage"` or `"bitcoin_txid"` |
 | `metadata.lock_commitment` | Must match recomputed commitment (section 9.1). Optional in v1. |
 
-### 13.2 Lightning receipt verification
+### 15.2 Lightning receipt verification
 
 For `proof.type == "lightning_preimage"`:
 
@@ -981,16 +986,16 @@ For `proof.type == "lightning_preimage"`:
 2. This is a pure cryptographic check -- no network call required
 3. The preimage proves the payment was made because only the payee's Lightning node can release it
 
-### 13.3 On-chain receipt verification
+### 15.3 On-chain receipt verification
 
 For `proof.type == "bitcoin_txid"`:
 
 1. The homeserver MAY verify the transaction on-chain via an Esplora/Electrum API
 2. Check: transaction exists, output pays the correct address, amount matches, has sufficient confirmations
-3. Minimum confirmations: 1 for amounts < 100,000 bitcoin, 3 for larger amounts
-4. Network verification is optional in v1. The homeserver MAY accept the txid on trust from the receipt, relying on the receipt's signature by the payer's key as evidence of good faith. This is consistent with the honest-gatekeeper model.
+3. Minimum confirmations: 1 for amounts below 100,000 BTC (base units per BIP 177, roughly 0.001 legacy BTC), 3 for larger amounts
+4. Network verification is optional in v1. When skipped, the homeserver relies on the viewer-signed ProofBundle plus the claimed txid under the honest-gatekeeper model (see section 15.4 for the full receipt authenticity position).
 
-### 13.4 Receipt authenticity (v1 decision)
+### 15.4 Receipt authenticity (v1 decision)
 
 The BIP-Paykit draft does not currently define signed receipts. This means a receipt alone does not cryptographically prove who paid or that the receipt was not fabricated.
 
@@ -1004,7 +1009,7 @@ Together these provide sufficient assurance for the honest-gatekeeper model: the
 
 **v2 direction:** Paykit should introduce signed receipts (signed by the payer's wallet key) to strengthen the chain. This would allow the homeserver to independently verify that the claimed payer actually authorized the payment, without relying solely on the ProofBundle signature. This is a Paykit-level change, not a Locks-level change.
 
-### 13.5 No Paykit library dependency required
+### 15.5 No Paykit library dependency required
 
 The homeserver does not need `paykit-lib` to verify receipts. Receipt verification is:
 
@@ -1019,11 +1024,11 @@ This keeps the homeserver's dependency footprint minimal.
 
 ---
 
-## 14. Homeserver migration and credible exit
+## 16. Homeserver migration and credible exit
 
 Locks must not break credible exit.
 
-### 14.1 Policy portability
+### 16.1 Policy portability
 
 LockPolicies are signed by the creator's content AppKey (traceable to their RootKey via AppCert), not the homeserver. When a creator migrates from Homeserver A to Homeserver B:
 
@@ -1033,11 +1038,11 @@ LockPolicies are signed by the creator's content AppKey (traceable to their Root
 4. `grant_issuers` in the policy is updated to include Homeserver B's AppKey
 5. Old grants (signed by A's AppKey) expire naturally (they are time-bounded)
 
-### 14.2 Viewer impact
+### 16.2 Viewer impact
 
 During migration, viewers with active grants can continue using them until expiry. After expiry, they re-verify at the new homeserver. Idempotent receipts mean no repayment is needed -- the same receipt works at the new homeserver.
 
-### 14.3 What migrates
+### 16.3 What migrates
 
 | Object | Portable? | Notes |
 |--------|-----------|-------|
@@ -1050,7 +1055,7 @@ During migration, viewers with active grants can continue using them until expir
 
 ---
 
-## 15. Implementation plan
+## 17. Implementation plan
 
 ### Deliverable 1: Protocol core (2 weeks)
 
@@ -1154,7 +1159,7 @@ During migration, viewers with active grants can continue using them until expir
 
 ---
 
-## 16. Open questions
+## 18. Open questions
 
 These are genuinely open and should be resolved during Deliverable 1:
 
@@ -1170,7 +1175,7 @@ These are genuinely open and should be resolved during Deliverable 1:
 
 ---
 
-## 17. Ideas explicitly adopted from external work
+## 19. Ideas explicitly adopted from external work
 
 ### From Fanfares (NIP-108)
 
@@ -1195,7 +1200,7 @@ These are genuinely open and should be resolved during Deliverable 1:
 - Phased lock types
 - Atomicity receipt support (Phase 5)
 
-## 18. Ideas explicitly rejected
+## 20. Ideas explicitly rejected
 
 | Idea | Why rejected |
 |------|-------------|
@@ -1211,7 +1216,7 @@ These are genuinely open and should be resolved during Deliverable 1:
 
 ---
 
-## 19. Upstream dependencies
+## 21. Upstream dependencies
 
 | Dependency | Version | What Locks needs from it |
 |-----------|---------|--------------------------|
@@ -1224,7 +1229,7 @@ These are genuinely open and should be resolved during Deliverable 1:
 
 ---
 
-## 20. Revenue model note
+## 22. Revenue model note
 
 This spec is a protocol document. It does not define Synonym's revenue extraction from Locks. However, the architecture enables several revenue paths:
 
