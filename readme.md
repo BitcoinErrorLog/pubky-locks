@@ -91,6 +91,17 @@ A valid UnlockGrant must satisfy **both** conditions:
 
 Both must hold simultaneously. If either condition fails -- the key is removed from `grant_issuers` in a policy update, or the creator revokes the AppCert in their KeyBinding -- the grant is invalid. This prevents ambiguity when delegation and policy change independently.
 
+### Grant validity under policy updates
+
+An active grant is valid against the policy version identified by its `policy_hash`, not against the latest policy. The rules are:
+
+- **Active grants survive non-material policy edits.** The homeserver checks the grant's `policy_hash` against the policy version that was current when the grant was issued. A non-material edit (preview, expiration) does not invalidate already-issued grants during normal resource access.
+- **Grant refresh requires the current policy.** The refresh endpoint checks whether the current policy still matches. If the `policy_hash` has changed, refresh fails and the viewer must re-verify.
+- **The delegation chain is checked at access time.** The issuer key must still be authorized by the creator's current KeyBinding/AppCert chain. If the creator revokes the Locks AppKey, all grants signed by that key become invalid immediately.
+- **Immediate revocation of all grants** is achieved by revoking the Locks AppKey in the KeyBinding. This is the kill switch.
+
+A policy MAY list more than one key in `grant_issuers` during migration windows, allowing Homeserver A and Homeserver B to overlap briefly.
+
 ---
 
 ## 4. Architecture
@@ -245,8 +256,8 @@ The creator-signed policy on a resource. Signed by the creator's content AppKey 
 | `lock_id` | string | yes | Unique identifier for this lock instance. 16 random bytes, base64url. |
 | `resource` | string | yes | URI of the gated resource. `pubky://<z32-pubkey>/pub/...` |
 | `creator` | string | yes | Creator's RootKey Ed25519 pubkey. `pk:<z32>` |
-| `criteria` | array | yes | List of proof criteria (see 5.1.1) |
-| `logic` | object | yes | Boolean logic tree combining criteria (see 5.1.2) |
+| `criteria` | array | yes | List of proof criteria (see 7.1.1) |
+| `logic` | object | yes | Boolean logic tree combining criteria (see 7.1.2) |
 | `grant_issuers` | array | yes | Ed25519 pubkeys authorized to sign grants. Typically the homeserver's delegated `locks` AppKey. |
 | `grant_ttl_sec` | integer | yes | Default grant lifetime in seconds |
 | `grant_mode` | string | yes | `"pop"` or `"bearer"`. Default `"pop"`. |
@@ -291,11 +302,11 @@ Each criterion defines one condition that can be satisfied by a proof.
 Password locks use a challenge-response model. The password hash is NOT published in the policy. Instead:
 
 1. Viewer requests a challenge from the homeserver (`GET /.well-known/locks/challenge?lock_id=...`)
-2. Homeserver returns a random nonce with a short TTL
-3. Viewer computes `proof = HMAC-SHA256(Argon2id(password, stored_salt), nonce)`
-4. Homeserver verifies by recomputing with its stored hash
+2. Homeserver returns a random nonce, the salt, and a short TTL
+3. Viewer computes `k = Argon2id(password, salt)`, then `response = HMAC-SHA256(k, nonce)`
+4. Homeserver recomputes using its stored hash and verifies the response matches
 
-The creator sets the password via authenticated homeserver API. The homeserver stores `Argon2id(password, random_salt)` privately. This prevents offline brute-force attacks against a public hash.
+The salt is not secret -- it is safe to return in the challenge. The creator sets the password via authenticated homeserver API. The homeserver stores `Argon2id(password, random_salt)` and the `salt` privately. This prevents offline brute-force attacks because the password hash itself is never published.
 
 **Tag criterion (v2):**
 
@@ -494,7 +505,7 @@ When `mode` is `"bearer"`, the `Authorization` header alone is sufficient. Beare
 | `INVALID_SIGNATURE` | ProofBundle signature invalid |
 | `VERIFICATION_FAILED` | One or more proofs failed verification |
 | `RECEIPT_EXPIRED` | Payment receipt outside `receipt_window_sec` |
-| `RECEIPT_REPLAY` | Receipt already used -- not emitted as an error. Server returns `status: "ok"` with the existing or refreshed grant. Listed here for internal classification only. |
+| `RECEIPT_REPLAY` | Internal classification only. Not returned in error responses. When a replayed receipt is detected, the server returns `status: "ok"` with the existing or refreshed grant. Implementers should log this for audit purposes but never surface it as a user-facing error. |
 | `RECEIPT_AMOUNT_MISMATCH` | Receipt amount does not match criterion |
 | `RECEIPT_MERCHANT_MISMATCH` | Receipt payee does not match criterion merchant |
 | `COMMITMENT_MISMATCH` | Receipt `lock_commitment` does not match expected value |
@@ -577,7 +588,7 @@ lock_commitment = SHA256(JCS(commitment_object))
 
 Using JCS ensures deterministic serialization across languages and platforms. The `domain` field provides domain separation. All fields are strings. The canonical JSON key ordering is alphabetical per JCS, making the construction unambiguous without manual field-ordering rules.
 
-The wallet computes this from the payment request (section 11) and includes it as `receipt.metadata.lock_commitment` (base64url-encoded). The homeserver recomputes it from the policy and verifies it matches.
+The wallet computes this from the payment request fields (section 11) and includes it as `receipt.metadata.locks.lock_commitment` (base64url-encoded). The homeserver recomputes it from the policy and verifies it matches.
 
 If the receipt lacks a `lock_commitment`, the homeserver MAY accept it in v1 for backward compatibility with wallets that have not yet implemented Locks-aware receipts. This leniency MUST be removed in v2.
 
@@ -703,7 +714,7 @@ The wallet (Bitkit or any Paykit-compatible wallet):
 2. Discovers the merchant's payment methods via Paykit directory (`/pub/paykit.app/v0/`)
 3. Executes the payment (Lightning, on-chain, or other supported method)
 4. Generates a `PaykitReceipt` per the BIP-Paykit receipt format
-5. Includes `lock_commitment` in `receipt.metadata` when the request contains a `lock_id`
+5. Recomputes `lock_commitment` from the request fields (`lock_id`, `resource`, `merchant`, `amount`, `asset`) and includes it in `receipt.metadata.locks`. If the request includes a pre-computed `lock_commitment`, the wallet MUST verify it matches the recomputed value and reject the request on mismatch.
 6. Returns the receipt to the requesting app via the callback URI
 
 ### 11.3 Receipt return
@@ -749,11 +760,12 @@ GET /.well-known/locks/challenge?lock_id=<lock_id>
 ```json
 {
   "nonce": "<base64url, 32 random bytes>",
+  "salt": "<base64url>",
   "expires_at": 1769500300
 }
 ```
 
-Nonce TTL: 300 seconds. One-time use.
+The `salt` is the Argon2id salt stored by the homeserver when the creator set the password. It is not secret. Nonce TTL: 300 seconds. One-time use.
 
 ### 12.3 Verify
 
@@ -976,7 +988,7 @@ The payment verifier requires these fields from the Paykit receipt (per BIP-Payk
 | `asset` | Must match `criterion.asset` (v1: only `BTC` is validated, per BIP 177) |
 | `created_at` | Must be within `criterion.receipt_window_sec` of current time |
 | `proof.type` | Must be `"lightning_preimage"` or `"bitcoin_txid"` |
-| `metadata.lock_commitment` | Must match recomputed commitment (section 9.1). Optional in v1. |
+| `metadata.locks.lock_commitment` | Must match recomputed commitment (section 9.1). Optional in v1. |
 
 ### 15.2 Lightning receipt verification
 
@@ -1109,7 +1121,7 @@ During migration, viewers with active grants can continue using them until expir
 **Target:** May 19, 2026
 
 - Parse `pubky-locks-payment` deep link request
-- Generate lock-bound Paykit receipt (with `lock_commitment` in metadata)
+- Generate lock-bound Paykit receipt (with `lock_commitment` in `receipt.metadata.locks`)
 - Return receipt to requesting app via callback
 - Receipt export/share for cross-device use
 - Handle edge cases: payment succeeds but callback fails (receipt saved locally, user can export)
