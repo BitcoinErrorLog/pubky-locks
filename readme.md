@@ -22,7 +22,7 @@ These five rules govern every design decision. When in doubt, re-read them.
 
 ## 2. What Locks is
 
-Locks is the authorization and commerce layer for the Pubky ecosystem. It lets creators gate resources — posts, files, collections, feeds, features, accounts — using signed policies. Viewers satisfy one or more conditions (payment, password, tag credential, time window, puzzle, contract signature). The creator's homeserver verifies those proofs and issues a time-bounded access grant. Payments happen out-of-band in Paykit-compatible wallets. Locks never touches funds.
+Locks is the authorization and commerce layer for the Pubky ecosystem. It lets creators gate resources -- posts, files, collections, feeds, features, accounts -- using signed policies. Viewers satisfy one or more conditions (payment, password, tag credential, time window, puzzle, contract signature). The creator's homeserver verifies those proofs and issues a time-bounded access grant. Payments happen out-of-band in Paykit-compatible wallets. Locks never touches funds.
 
 ### Product goals
 
@@ -50,7 +50,7 @@ Locks does not:
 MVP uses an **honest gatekeeper** model:
 
 - The homeserver is trusted to run verifiers honestly and issue grants only when proofs satisfy the policy
-- The creator-signed policy constrains what the homeserver may do — it cannot invent grants for policies it did not receive
+- The creator-signed policy constrains what the homeserver may do -- it cannot invent grants for policies it did not receive
 - Grants bind to the policy hash, preventing substitution
 - Idempotency prevents double-charging
 - Optional audit logs improve accountability
@@ -89,7 +89,7 @@ A valid UnlockGrant must satisfy **both** conditions:
 1. The signing key is listed in the policy's `grant_issuers` array
 2. The signing key is currently authorized by the creator's KeyBinding/AppCert delegation chain
 
-Both must hold simultaneously. If either condition fails — the key is removed from `grant_issuers` in a policy update, or the creator revokes the AppCert in their KeyBinding — the grant is invalid. This prevents ambiguity when delegation and policy change independently.
+Both must hold simultaneously. If either condition fails -- the key is removed from `grant_issuers` in a policy update, or the creator revokes the AppCert in their KeyBinding -- the grant is invalid. This prevents ambiguity when delegation and policy change independently.
 
 ---
 
@@ -148,8 +148,8 @@ Guarded data lives under `/pub/` (so it is addressable and discoverable) but the
 
 Implementation note: the homeserver enforces this at the HTTP layer. A request for a guarded resource without a valid `Authorization: PubkyGrant <base64url-grant>` header receives:
 
-- `402 Payment Required` — when at least one criterion in the policy is type `payment` or `crowdwall`
-- `403 Forbidden` — when the lock is password-only, tag-only, or otherwise non-payment
+- `402 Payment Required` -- when at least one criterion in the policy is type `payment` or `crowdwall`
+- `403 Forbidden` -- when the lock is password-only, tag-only, or otherwise non-payment
 
 Both responses include the policy URI in a `Link: <policy-uri>; rel="lock-policy"` header so the client can fetch the policy and determine how to unlock.
 
@@ -237,7 +237,7 @@ flowchart TB
 
 ### 5.1 LockPolicy
 
-The creator-signed policy on a resource. Signed by the creator's content AppKey (not the RootKey — see section 3, delegation model).
+The creator-signed policy on a resource. Signed by the creator's content AppKey (not the RootKey -- see section 3, delegation model).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -276,7 +276,7 @@ Each criterion defines one condition that can be satisfied by a proof.
 }
 ```
 
-`amount` is a string representation of the value in the base unit of `asset`. `asset` identifies the denomination (v1 implementations validate `BTC` only, per BIP 177 where 1 bitcoin is the base indivisible unit; the schema supports future extension). `receipt_window_sec` defines how old a receipt can be when submitted. `merchant` is the payee's pubkey — the homeserver verifies the receipt was paid to this key.
+`amount` is a string representation of the value in the base unit of `asset`. `asset` identifies the denomination (v1 implementations validate `BTC` only, per BIP 177 where 1 bitcoin is the base indivisible unit; the schema supports future extension). `receipt_window_sec` defines how old a receipt can be when submitted. `merchant` is the payee's pubkey -- the homeserver verifies the receipt was paid to this key.
 
 **Password criterion:**
 
@@ -391,7 +391,7 @@ The viewer's submission of proofs to the homeserver.
 }
 ```
 
-The receipt follows the Paykit receipt format (BIP-Paykit Section "Receipt Format" and "Payment Proofs"). The `lock_commitment` field is a Locks-specific extension — see section 9.
+The receipt follows the Paykit receipt format (BIP-Paykit Section "Receipt Format" and "Payment Proofs"). The `lock_commitment` field is a Locks-specific extension -- see section 9.
 
 #### 5.2.2 Password proof
 
@@ -489,7 +489,7 @@ When `mode` is `"bearer"`, the `Authorization` header alone is sufficient. Beare
 | `INVALID_SIGNATURE` | ProofBundle signature invalid |
 | `VERIFICATION_FAILED` | One or more proofs failed verification |
 | `RECEIPT_EXPIRED` | Payment receipt outside `receipt_window_sec` |
-| `RECEIPT_REPLAY` | Receipt already used (idempotency hit — returns existing grant) |
+| `RECEIPT_REPLAY` | Receipt already used (idempotency hit -- returns existing grant) |
 | `RECEIPT_AMOUNT_MISMATCH` | Receipt amount does not match criterion |
 | `RECEIPT_MERCHANT_MISMATCH` | Receipt payee does not match criterion merchant |
 | `COMMITMENT_MISMATCH` | Receipt `lock_commitment` does not match expected value |
@@ -617,7 +617,7 @@ Global limits also apply:
 
 ### 7.4 No atomic payment-delivery guarantee
 
-The system is best-effort, not atomic. The viewer pays first, then receives a grant. If the homeserver crashes between payment receipt and grant issuance, the viewer must retry. Idempotency ensures the same receipt returns the same grant — the viewer is never charged twice. But the window between payment and grant issuance is a known gap, not a bug. Apps should handle this gracefully: save the receipt locally before submitting the proof, so the receipt survives app or server failure.
+The system is best-effort, not atomic. The viewer pays first, then receives a grant. If the homeserver crashes between payment receipt and grant issuance, the viewer must retry. Idempotency ensures the same receipt returns the same grant -- the viewer is never charged twice. But the window between payment and grant issuance is a known gap, not a bug. Apps should handle this gracefully: save the receipt locally before submitting the proof, so the receipt survives app or server failure.
 
 ---
 
@@ -783,7 +783,7 @@ Where `sig` is the viewer's Ed25519 signature over `JCS({"grant_id": "...", "tim
 - `403` if the original grant's idempotency key has been invalidated (e.g., policy changed)
 - `404` if grant not found
 
-Refresh is allowed as long as the underlying policy has not changed (same `policy_hash`). If the creator updates the policy, existing grants cannot be refreshed — the viewer must re-verify.
+Refresh is allowed as long as the underlying policy has not changed (same `policy_hash`). If the creator updates the policy, existing grants cannot be refreshed -- the viewer must re-verify.
 
 ### 10.5 Access guarded resource
 
@@ -872,7 +872,7 @@ A creator locks content through the app's publish flow:
 
 A `lock_id` is immutable per lock instance. Edits fall into two categories:
 
-- **Material edits** (changes to `criteria`, `logic`, `grant_issuers`, `grant_mode`, or `grant_ttl_sec`) create a **new lock instance** with a new `lock_id`. The old lock is removed. Existing grants for the old policy cannot be refreshed and expire naturally. Receipts bound to the old `lock_id` via `lock_commitment` cannot satisfy the new lock — viewers with valid payment receipts can re-verify because idempotency is keyed on `lock_id || viewer || receipt_hash`, and the new `lock_id` produces a new idempotency key, but the `lock_commitment` will not match. In practice, material edits to paid locks should be rare.
+- **Material edits** (changes to `criteria`, `logic`, `grant_issuers`, `grant_mode`, or `grant_ttl_sec`) create a **new lock instance** with a new `lock_id`. The old lock is removed. Existing grants for the old policy cannot be refreshed and expire naturally. Receipts bound to the old `lock_id` via `lock_commitment` cannot satisfy the new lock -- viewers with valid payment receipts can re-verify because idempotency is keyed on `lock_id || viewer || receipt_hash`, and the new `lock_id` produces a new idempotency key, but the `lock_commitment` will not match. In practice, material edits to paid locks should be rare.
 - **Non-material edits** (changes to `preview`, `expires_at`, or extension fields) update the policy **in place** with the same `lock_id`. The `policy_hash` changes, so grant refresh will fail until viewers re-verify, but no new `lock_id` is needed and existing receipts remain valid.
 
 ### 11.3 Grant lifecycle
@@ -978,7 +978,7 @@ The payment verifier requires these fields from the Paykit receipt (per BIP-Payk
 For `proof.type == "lightning_preimage"`:
 
 1. Verify `SHA256(preimage) == payment_hash`
-2. This is a pure cryptographic check — no network call required
+2. This is a pure cryptographic check -- no network call required
 3. The preimage proves the payment was made because only the payee's Lightning node can release it
 
 ### 13.3 On-chain receipt verification
@@ -996,9 +996,9 @@ The BIP-Paykit draft does not currently define signed receipts. This means a rec
 
 **v1 rule:** Receipt authenticity is established by the combination of:
 
-1. **Method-specific proof** — the Lightning preimage or on-chain txid proves the payment actually happened
-2. **Lock commitment** — binds the receipt to the specific lock, preventing cross-lock replay
-3. **Viewer-signed ProofBundle** — the viewer signs the entire bundle including the receipt, binding their identity to the claim of payment
+1. **Method-specific proof** -- the Lightning preimage or on-chain txid proves the payment actually happened
+2. **Lock commitment** -- binds the receipt to the specific lock, preventing cross-lock replay
+3. **Viewer-signed ProofBundle** -- the viewer signs the entire bundle including the receipt, binding their identity to the claim of payment
 
 Together these provide sufficient assurance for the honest-gatekeeper model: the payment is real (preimage proves it), it was for this lock (commitment proves it), and this viewer claims it (ProofBundle signature proves it). A viewer who fabricates a receipt cannot produce a valid preimage.
 
@@ -1035,7 +1035,7 @@ LockPolicies are signed by the creator's content AppKey (traceable to their Root
 
 ### 14.2 Viewer impact
 
-During migration, viewers with active grants can continue using them until expiry. After expiry, they re-verify at the new homeserver. Idempotent receipts mean no repayment is needed — the same receipt works at the new homeserver.
+During migration, viewers with active grants can continue using them until expiry. After expiry, they re-verify at the new homeserver. Idempotent receipts mean no repayment is needed -- the same receipt works at the new homeserver.
 
 ### 14.3 What migrates
 
@@ -1148,7 +1148,7 @@ During migration, viewers with active grants can continue using them until expir
 - Define key delivery mechanism (Noise session or envelope)
 - Define per-buyer persistence model (grant-based, key-note, or local-only)
 - Define preview + encrypted payload object model
-- Produce design doc only — no MVP dependency
+- Produce design doc only -- no MVP dependency
 
 **Exit criteria:** Design doc reviewed and approved. Implementation deferred to 2027.
 

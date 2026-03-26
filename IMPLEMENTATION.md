@@ -243,18 +243,18 @@ Create in the Pubky App frontend:
 
 **Services and hooks:**
 
-- `services/locksService.ts` — API calls to `/.well-known/locks/*`, grant caching, receipt storage
-- `hooks/useLocks.ts` — Lock state management (grant status, refresh, expiry)
-- `hooks/useUnlock.ts` — Unlock flow orchestration (detect lock type → choose path → execute)
+- `services/locksService.ts` -- API calls to `/.well-known/locks/*`, grant caching, receipt storage
+- `hooks/useLocks.ts` -- Lock state management (grant status, refresh, expiry)
+- `hooks/useUnlock.ts` -- Unlock flow orchestration (detect lock type → choose path → execute)
 
 **Components:**
 
-- `components/locks/LockIndicator.tsx` — Lock badge on content (type icon, price)
-- `components/locks/UnlockModal.tsx` — Payment/password entry UI
-- `components/locks/PaymentFlow.tsx` — Wallet deep-link handoff + callback handling
-- `components/locks/ReceiptImport.tsx` — Paste or scan receipt for cross-device unlock
-- `components/locks/GrantStatus.tsx` — Show active grants, refresh status, expiry countdown
-- `components/locks/CreatorLockForm.tsx` — Lock type selection, amount/password input for creators
+- `components/locks/LockIndicator.tsx` -- Lock badge on content (type icon, price)
+- `components/locks/UnlockModal.tsx` -- Payment/password entry UI
+- `components/locks/PaymentFlow.tsx` -- Wallet deep-link handoff + callback handling
+- `components/locks/ReceiptImport.tsx` -- Paste or scan receipt for cross-device unlock
+- `components/locks/GrantStatus.tsx` -- Show active grants, refresh status, expiry countdown
+- `components/locks/CreatorLockForm.tsx` -- Lock type selection, amount/password input for creators
 
 **Storage:**
 
@@ -311,7 +311,7 @@ Using pubky-noise (NoiseClient, NoiseServer, sealed_blob):
 
 Create these supplementary documents as the implementation progresses:
 
-1. **TESTING.md** — Test vector format, testing requirements, interoperability test cases
-2. **WALLET_INTEGRATION.md** — Guide for Paykit-compatible wallet developers
-3. **APP_INTEGRATION.md** — Guide for Locks-compatible app developers
-4. **ENCODING.md** — JSON encoding rules, JCS conventions, future binary format spec (if needed)
+1. **TESTING.md** -- Test vector format, testing requirements, interoperability test cases
+2. **WALLET_INTEGRATION.md** -- Guide for Paykit-compatible wallet developers
+3. **APP_INTEGRATION.md** -- Guide for Locks-compatible app developers
+4. **ENCODING.md** -- JSON encoding rules, JCS conventions, future binary format spec (if needed)
