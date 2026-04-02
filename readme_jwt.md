@@ -23,9 +23,9 @@ These rules govern design and implementation decisions for Locks v1.
 
 Locks is the authorization based gating layer for the Pubky ecosystem.
 
-Creators define lock criteria for resources (payment, password, tag, and future proof types). Viewers satisfy criteria, then receive a **homeserver-issued access JWT** with a tightly scoped capability for the guarded resource.
+Creators define lock criteria for resources (payment, password, tag, and future proof types). Viewers satisfy criteria, then receive a **homeserver-issued replacement JWT** whose capabilities are the union of current session scopes and lock-authorized guarded-read scope.
 
-Locks does not move funds and does not replace core authentication. It extends homeserver authorization with lock-aware verification and token downscoping.
+Locks does not move funds and does not replace core authentication. It extends homeserver authorization with lock-aware verification and scope-union session extension.
 
 ### Product goals
 
@@ -51,7 +51,9 @@ Locks does not:
 
 Locks v1 uses the existing Pubky trust posture:
 
-- **Homeserver/Lock service -trusted enforcement**: the homeserver (lock service hosted infort of it) is trusted to evaluate criteria and enforce capability checks honestly.
+- **Two-party trust**: the homeserver stores guarded data and enforces capability checks; the guard service (co-located with the creator app domain) verifies criteria and issues attestations. Homeserver and guard operators may be distinct.
+- **Guard attestation required**: homeserver only mints access JWTs after verifying a guard-signed attestation over the eligible unlock.
+- **Service authentication**: guard and homeserver use mTLS for server-to-server calls; homeserver verifies guard signatures against the guard public key.
 - **Cold key model remains intact**: Ring signs app Grants; routine requests use homeserver JWTs.
 - **Credible exit preserved**: users can migrate homeservers via pkarr without losing identity.
 - **No trustless claims**: this is not decentralized consensus authorization.
@@ -65,7 +67,44 @@ This design intentionally relies on the auth architecture where:
 - Homeserver issues short-lived JWT access tokens.
 - Capabilities are enforced server-side via session records keyed by JWT `jti`.
 
-Locks extends this by requesting a **downscoped JWT** only after lock criteria pass.
+Locks extends this by requesting a **session scope extension** only after lock criteria pass.
+
+### 3.2 Roles and trust boundaries
+
+```mermaid
+flowchart LR
+  subgraph ViewerDomain["Viewer app domain"]
+    V["Viewer App\nholds Grant + PoP key"]
+  end
+
+  subgraph CreatorDomain["Creator app + guard service domain"]
+    GAPI["Locks API\n/locks/v1/*"]
+    GVER["Verifier registry + task engine"]
+    GSIG["Attestation signer\nGuard key: pk:<guard_z32>"]
+  end
+
+  subgraph HomeDomain["Homeserver domain"]
+    HAPI["Homeserver API"]
+    HSES["Session service\nPOST /session"]
+    HATT["Attestation verifier"]
+    HSTORE["Policy + guarded data store"]
+  end
+
+  V -->|"ProofBundle"| GAPI
+  GAPI --> GVER
+  V -->|"Current token + Grant + PoP + caps_add"| GAPI
+  GAPI --> GSIG
+  GSIG -->|"UnlockAttestation (JWS)"| HATT
+  GAPI -->|"mTLS proxied session exchange"| HSES
+  HATT --> HSES
+  HSES -->|"replacement union JWT"| GAPI
+  GAPI -->|"replacement token"| V
+  V -->|"Bearer JWT"| HAPI
+  HAPI --> HSTORE
+
+  C["Creator app"] -->|"manage lock/password"| HAPI
+  GAPI -->|"read lock policy only"| HSTORE
+```
 
 ---
 
@@ -73,15 +112,18 @@ Locks extends this by requesting a **downscoped JWT** only after lock criteria p
 
 ## 4.1 Components
 
-### Lock service components
+### Creator app + guard service components (same domain)
 - **Lock Policy Store Manager**: manager of homeserver-stored lock policy objects (unsigned in v1).
 - **Lock Guard Service**: verifies proofs and orchestrates unlock tasks.
 - **Verifier Registry**: payment/password/tag/oracle adapters (plugins).
 - **Unlock Task Engine**: async-first processing and polling.
-- **Session Exchange Proxy**: forwards Grant + PoP to homeserver `/session` with Locks downscope request.
+- **Session Extension Proxy**: forwards session extension request to homeserver `/session` using current session, Grant + PoP, and guard attestation.
+- **Attestation Signer**: guard signs unlock attestations with its own long-term key.
 
 ### Homeservice components
 - **Homeserver Session Service**: verifies Grant/PoP and mints JWT.
+- **Attestation Verifier**: validates guard signatures and attestation scope.
+- **Policy and password store**: homeserver owns policy writes and password material.
 
 ## 4.2 Two-layer model
 
@@ -90,7 +132,7 @@ Locks extends this by requesting a **downscoped JWT** only after lock criteria p
 - Lock policies
 - Proof verification
 - Async unlock tasks
-- JWT token downscope exchange
+- JWT scope-union session extension
 - Guarded path enforcement
 
 **Layer B: Confidential delivery (deferred)**
@@ -108,13 +150,13 @@ Layer B must not block Layer A delivery.
 2. Creator stores guarded payload under /guarded/.
 3. Viewer discovers preview + lock signal (via /events endpoint).
 4. Viewer obtains required proof ids (payment/password/tag/oracle ref).
-5. Viewer creates unlock task: POST /locks/v1/unlock_requests with proof ids.
+5. Viewer creates unlock task: POST <creator-guard-origin>/locks/v1/unlock_requests with proof ids.
 6. Guard service verifies criteria asynchronously (including polling external proof sources if needed).
 7. Viewer polls unlock task status.
-8. When task is eligible, viewer submits Grant + fresh PoP to POST /locks/v1/unlock_requests/{task_id}/token. # TODO for dzdidi check if it is viewer or lock service who should send request request directly?
-9. Guard service proxies POST /session with requested downscoped capability.
-10. Homeserver returns access JWT; guard service forwards it to viewer.
-11. Viewer reads guarded payload with Authorization: Bearer <jwt>. # TODO: maybe it is better/possible to extend existing user's token with new capabilities by homeserver
+8. When task is eligible, viewer submits current token + Grant + fresh PoP to POST <creator-guard-origin>/locks/v1/unlock_requests/{task_id}/token.
+9. Guard service signs an UnlockAttestation and proxies POST /session with current token + Grant + PoP + attestation + additive capability.
+10. Homeserver verifies attestation (mTLS + guard signature), unions scopes, revokes old session, returns replacement access JWT; guard forwards it to viewer.
+11. Viewer reads guarded payload with Authorization: Bearer <jwt>.
 ```
 
 ---
@@ -152,17 +194,19 @@ v1 policies are homeserver-managed objects. They are not creator-signed in MVP.
 |-------|------|----------|-------------|
 | `v` | integer | yes | Schema version (`1`) |
 | `lock_id` | string | yes | Unique lock identifier |
-| `creator` | string | yes | Creator pubky (`<z32>`) |
-| `resource_preview` | string | yes | Public preview resource (`pubky<z32>/pub/...`) |
-| `resource_guarded` | string | yes | Guarded payload URI (`pubky<z32>/guarded/...`) |
+| `creator` | string | yes | Creator pubky (`pk:<z32>`) |
+| `resource_preview` | string | yes | Public preview URI (`pubky://<z32>/pub/...`) |
+| `resource_guarded` | string | yes | Guarded payload URI (`pubky://<z32>/guarded/...`) |
 | `criteria` | array | yes | Criteria list |
 | `logic` | object | yes | `ANY` / `ALL` logic tree |
 | `token_ttl_sec` | integer | yes | Access JWT target TTL for this lock |
-| `token_scope` | string | yes | Scope policy (`single_resource_read` in v1) |
+| `token_scope` | string | yes | Additive scope policy (`single_resource_read` in v1) |
+| `guard_service_id` | string | yes | Guard identity (`pk:<z32>` or app id) |
+| `guard_service_url` | string | yes | Guard API origin (`https://...`), co-located with creator app domain in this model |
 | `preview` | object | no | Public lock preview metadata |
 | `created_at` | integer | yes | Unix timestamp |
 | `updated_at` | integer | yes | Unix timestamp |
-| `expires_at` | integer | no | Lock expiration | # TODO (dzdidi): is this when lock will be auto relased of for how long the lock is valid? Probably firs one because the later can be done through logic
+| `expires_at` | integer | no | Lock expiration |
 
 ## 6.2 ProofBundle
 
@@ -197,7 +241,7 @@ Asynchronous verification state.
 | `updated_at` | integer | yes | Unix timestamp |
 | `expires_at` | integer | yes | Task expiry |
 
-## 6.4 UnlockTokenResponse # TODO: dzdidi (see about extending session)
+## 6.4 UnlockTokenResponse
 
 
 Returned after successful token exchange for an eligible task.
@@ -207,13 +251,76 @@ Returned after successful token exchange for an eligible task.
 | `status` | string | yes | `ok` |
 | `token` | string | yes | Homeserver JWT access token |
 | `session` | object | yes | Session metadata from homeserver |
+| `replaced_session_jti` | string | yes | Prior session revoked by replacement |
 | `task_id` | string | yes | Source unlock task |
 
 The `session` object follows the homeserver session response model and includes `grant_id`, `token_expires_at`, and effective capabilities.
 
+## 6.5 UnlockAttestation
+
+Guard-signed proof that a specific unlock task is eligible.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `v` | integer | yes | `1` |
+| `attestation_id` | string | yes | Unique attestation id |
+| `task_id` | string | yes | Unlock task id |
+| `lock_id` | string | yes | Lock id |
+| `viewer` | string | yes | Viewer pubky |
+| `resource_guarded` | string | yes | Guarded resource URI |
+| `base_session_jti` | string | yes | JWT session being extended |
+| `caps_add` | array | yes | Additive capabilities requested |
+| `issued_at` | integer | yes | Unix timestamp |
+| `expires_at` | integer | yes | Attestation expiry |
+| `guard_issuer` | string | yes | Guard service public key (`pk:<z32>`) |
+| `sig` | string | yes | Guard signature over canonical form |
+
+## 6.6 UnlockAttestation JWS profile (minimal v1)
+
+UnlockAttestation is transported as compact JWS (`base64url(header).base64url(payload).base64url(sig)`).
+
+**Header:**
+```json
+{
+  "alg": "EdDSA",
+  "typ": "pubky-locks-attestation"
+}
+```
+
+**Payload:**
+```json
+{
+  "iss": "pk:<guard_z32>",
+  "aud": "pk:<homeserver_z32>",
+  "jti": "<attestation_id>",
+  "iat": 1769500000,
+  "exp": 1769500030,
+  "lock_id": "<lock_id>",
+  "task_id": "<task_id>",
+  "viewer": "pk:<viewer_z32>",
+  "resource_guarded": "pubky://<creator_z32>/guarded/<app-id>/posts/<id>/payload.json",
+  "base_session_jti": "<current_jti>",
+  "caps_add": ["/guarded/<app-id>/posts/<id>/payload.json:r"],
+  "result": "eligible"
+}
+```
+
+**Validation rules (homeserver):**
+
+- Verify mTLS peer identity for guard-to-homeserver channel.
+- Verify JWS signature against configured guard public key.
+- `iss` MUST match policy `guard_service_id`.
+- `aud` MUST equal homeserver public key.
+- `exp - iat` MUST be `<= 30` seconds.
+- `result` MUST be `eligible`.
+- `base_session_jti` MUST match the session referenced by the presented current token.
+- `caps_add` MUST exactly match token extension request scope.
+- Resulting `caps_out = caps_base UNION caps_add` MUST remain subset of Grant caps.
+- `jti` MUST be one-time-use (replay rejected).
+
 ---
 
-## 7. JWT Session Integration for Locks # TODO dzdidi: make sure it is fully alligned with Auth proposal
+## 7. JWT Session Integration for Locks
 
 Locks uses the Grant + PoP + JWT architecture as follows.
 
@@ -224,24 +331,32 @@ Viewer client must hold:
 - A valid user-signed Grant (with `cnf` key binding).
 - The corresponding PoP private key.
 
-## 7.2 Downscoped session exchange
+## 7.2 Scope-union session exchange
 
 When an unlock task reaches `eligible`, Locks requests a token through the homeserver session endpoint by proxying:
 
+- `current_token`: viewer's current homeserver JWT
 - `grant`: user Grant
 - `pop_proof`: fresh PoP proof for target homeserver
-- `caps_req`: requested downscoped capabilities
+- `caps_add`: requested additive capabilities
+- `attestation`: guard-signed UnlockAttestation
 
-### Downscope rule (mandatory)
+Homeserver verifies attestation signature and enforces mTLS-authenticated guard identity.
+Guard service credentials are service-only and MUST NOT be reused as viewer capabilities.
+Attestation format and validation are defined in **6.6**.
 
-`caps_req` must be a strict subset of Grant capabilities.
+### Scope-union rules (mandatory)
 
-- If not subset: reject with `AUTH_SCOPE_MISMATCH`.
-- If subset: homeserver mints JWT and stores downscoped session metadata keyed by `jti`.
+`caps_base` is taken from the active session identified by `current_token`.
 
-## 7.3 v1 token scope
+- Compute `caps_out = caps_base UNION caps_add`.
+- If `caps_out` exceeds Grant capabilities: reject with `UNION_NOT_IN_GRANT`.
+- If valid: homeserver mints replacement JWT/session with `caps_out` and revokes prior session.
+- Operation is idempotent on `(base_session_jti, task_id)`; retries return the same replacement token/session state.
 
-v1 Locks uses only `single_resource_read` scope.
+## 7.3 v1 additive scope
+
+v1 Locks adds only `single_resource_read` guarded scope.
 
 Canonical capability shape:
 
@@ -255,6 +370,7 @@ No write access and no wildcard expansion beyond the target resource path.
 
 - JWT lifetime is short/medium and defined by homeserver policy (Locks `token_ttl_sec` is an input target, capped by homeserver constraints).
 - Revocation follows homeserver session revocation semantics.
+- Session extension replaces the prior token immediately.
 - App refresh uses normal `/session` exchange with fresh PoP.
 
 ---
@@ -308,16 +424,22 @@ Link: <policy-uri>; rel="lock-policy"
 
 No `402` split in v1.
 
+Unlock behavior on guard failure:
+
+- New unlocks fail closed when guard is unavailable.
+- Existing JWTs remain valid until expiry.
+
 ---
 
 ## 10. API
 
-All Locks endpoints are under `/locks/v1/*`.
+Lock guard endpoints are served from the creator app/guard service origin under `/locks/v1/*`.
+Homeserver management endpoints remain on the homeserver origin.
 
-## 10.1 Get policy
+## 10.1 Get policy (guard service)
 
 ```
-GET /locks/v1/policy?resource=<pubky-uri>
+GET <creator-guard-origin>/locks/v1/policy?resource=<pubky-uri>
 ```
 
 Responses:
@@ -326,26 +448,26 @@ Responses:
 - `404` no lock for resource
 - `410` lock/resource removed
 
-## 10.2 Password challenge
+## 10.2 Password challenge (guard service)
 
 ```
-GET /locks/v1/challenge?lock_id=<lock_id>
+GET <creator-guard-origin>/locks/v1/challenge?lock_id=<lock_id>
 ```
 
 Response:
 
 ```json
 {
-  "nonce": "<base64url>", # TODO dzdidi is it even url?
+  "nonce": "<base64url>",
   "salt": "<base64url>",
   "expires_at": 1769500300
 }
 ```
 
-## 10.3 Create unlock request
+## 10.3 Create unlock request (guard service)
 
 ```
-POST /locks/v1/unlock_requests
+POST <creator-guard-origin>/locks/v1/unlock_requests
 Content-Type: application/json
 
 {
@@ -364,54 +486,59 @@ Response:
 }
 ```
 
-## 10.4 Poll unlock request
+## 10.4 Poll unlock request (guard service)
 
 ```
-GET /locks/v1/unlock_requests/<task_id>
+GET <creator-guard-origin>/locks/v1/unlock_requests/<task_id>
 ```
 
 Response includes task state and criterion evaluation progress.
 
-## 10.5 Exchange eligible task for token
+## 10.5 Exchange eligible task for token (guard service)
 
 ```
-POST /locks/v1/unlock_requests/<task_id>/token
+POST <creator-guard-origin>/locks/v1/unlock_requests/<task_id>/token
 Content-Type: application/json
 
 {
+  "current_token": "<jwt>",
   "grant": "<jws>",
   "pop_proof": "<jws>",
-  "caps_req": ["/guarded/<app-id>/posts/<id>/payload.json:r"]
+  "caps_add": ["/guarded/<app-id>/posts/<id>/payload.json:r"]
 }
 ```
 
 Behavior:
 
 1. Validate task is `eligible` and not expired.
-2. Validate `caps_req` matches lock target scope.
-3. Proxy to homeserver `POST /session`.
-4. Return homeserver JWT/session payload.
+2. Validate `caps_add` matches lock target scope.
+3. Issue UnlockAttestation signed by guard key.
+4. Proxy to homeserver `POST /session` with current token + Grant + PoP + attestation.
+5. Homeserver unions scopes, revokes prior session, and returns replacement JWT/session payload.
+6. Return replacement JWT/session payload.
 
-## 10.6 Creator management endpoints
+The attestation is created and transmitted only on the guard-to-homeserver hop; the viewer does not submit it directly.
+
+## 10.6 Creator management endpoints (homeserver)
 
 Authenticated creator session required.
 
 Create/update lock policy:
 
 ```
-PUT /locks/v1/manage
+PUT <homeserver-origin>/locks/v1/manage
 ```
 
 Remove lock:
 
 ```
-DELETE /locks/v1/manage?lock_id=<lock_id>
+DELETE <homeserver-origin>/locks/v1/manage?lock_id=<lock_id>
 ```
 
 Set password:
 
 ```
-POST /locks/v1/manage/password
+POST <homeserver-origin>/locks/v1/manage/password
 ```
 
 ---
@@ -426,7 +553,15 @@ POST /locks/v1/manage/password
 | `POLICY_EXPIRED` | Lock policy expired |
 | `VERIFICATION_FAILED` | Criteria not satisfied |
 | `TASK_EXPIRED` | Unlock task expired before completion |
-| `AUTH_SCOPE_MISMATCH` | Requested downscope exceeds Grant capabilities |
+| `SESSION_NOT_FOUND` | Referenced base session does not exist |
+| `SESSION_SUBJECT_MISMATCH` | Base session subject does not match unlock viewer |
+| `UNION_SCOPE_INVALID` | Requested additive scope is malformed or lock-mismatched |
+| `UNION_NOT_IN_GRANT` | Union of base and additive scopes exceeds Grant capabilities |
+| `ATTESTATION_INVALID` | Guard attestation invalid or mismatched |
+| `ATTESTATION_EXPIRED` | Guard attestation expired |
+| `ATTESTATION_REPLAY` | Attestation `jti` already used |
+| `GUARD_AUTH_FAILED` | Guard to homeserver authentication failed |
+| `GUARD_UNAVAILABLE` | Guard service unreachable |
 | `GRANT_REVOKED` | Grant revoked at homeserver |
 | `GRANT_EXPIRED` | Grant expired |
 | `POP_INVALID` | PoP verification failed |
@@ -454,8 +589,9 @@ Resource metadata lock signal example:
     "amount": "50000",
     "asset": "BTC",
     "policy_uri": "pubky://<z32>/pub/<app-id>/locks/policies/<lock_id>.json",
-    "policy_uri": "pubky://<z32>/pub/locks/policies/<lock_id>.json", # TODO dzdidi this should be fine
-    "guarded_uri": "pubky://<z32>/guarded/<app-id>/posts/<id>/payload.json"
+    "guarded_uri": "pubky://<z32>/guarded/<app-id>/posts/<id>/payload.json",
+    "guard_service_id": "pk:<z32>",
+    "guard_service_url": "https://locks.example.com"
   }
 }
 ```
@@ -499,8 +635,7 @@ This architecture keeps migration practical:
 
 No lock-specific key delegation chain is required in v1.
 
-TODO: dzdidi
-- is locke service on the same ip as homeserver or is separate service with its own key so that it is possible to migrate them independently?
+Guard services are independently addressable by `guard_service_id` and `guard_service_url` and can be swapped without changing homeserver identity, as long as policies are updated to point to the new guard.
 
 ---
 
@@ -511,18 +646,18 @@ TODO: dzdidi
 - Freeze unsigned `LockPolicy` v1 schema.
 - Freeze `UnlockTask` and async status model.
 - Freeze `/locks/v1` API routes.
-- Freeze downscope contract (`caps_req` subset rule).
+- Freeze scope-union contract (`caps_base UNION caps_add`, Grant-bound check, replacement semantics, idempotency keying).
 
-Exit criteria: spec stable, examples and test vectors for downscope checks and async state transitions.
+Exit criteria: spec stable, examples and test vectors for union checks and async state transitions.
 
 ## Deliverable 2: Homeserver lock guard service (3 weeks)
 
 - Implement verifier registry and async unlock task engine.
 - Implement `/locks/v1/unlock_requests` lifecycle.
-- Implement `/locks/v1/unlock_requests/{task_id}/token` proxy to `/session`.
+- Implement `/locks/v1/unlock_requests/{task_id}/token` proxy to `/session` with session-union semantics.
 - Implement guarded `/guarded/*` authorization checks using JWT capabilities.
 
-Exit criteria: end-to-end unlock to guarded read works with JWT downscope.
+Exit criteria: end-to-end unlock to guarded read works with replacement union JWT.
 
 ## Deliverable 3: App integration (3 weeks)
 
@@ -553,7 +688,7 @@ Exit criteria: locked items are discoverable; guarded payload stays protected.
 
 ## 16. Open Questions
 
-1. **Downscope syntax extension**: confirm final `caps_req` encoding and validation rules for `/session` compatibility.
+1. **Union extension syntax**: confirm final `caps_add` encoding and `/session` extension mode compatibility.
 2. **Async orchestration limits**: define timeout and retry strategy per verifier type.
 3. **Oracle adapters**: standardize proof-reference schema for external public APIs.
 4. **TTL policy bounds**: define min/max `token_ttl_sec` for anti-abuse and UX stability.
@@ -569,4 +704,4 @@ Exit criteria: locked items are discoverable; guarded payload stays protected.
 - Standardized guarded payload path under `/guarded/*`.
 - Simplified v1 policies to unsigned homeserver-managed objects.
 - Unified unauthorized guarded reads under `403`.
-- Added mandatory JWT downscope rule for lock-issued access tokens.
+- Added mandatory JWT scope-union extension rule for lock-issued replacement access tokens.
