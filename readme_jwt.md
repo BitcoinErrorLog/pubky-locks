@@ -16,7 +16,7 @@
 | Access JWT | Homeserver | Server key (Ed25519) | Server keystore/KMS | Short-lived bearer token |
 | API request auth | None (app) | JWT only | N/A | Per-request auth; server checks `jti` session |
 
-## TLDR
+## TL;DR
 ### Auth Roles: Creator vs Viewer
 
 Creator and viewer have different auth paths in Locks v1. Creator is the owner/publisher; viewer is the unlocking consumer.
@@ -77,7 +77,7 @@ These rules govern design and implementation decisions for Locks v1.
 
 ## 2. What Locks Is
 
-Locks is the authorization based gating layer for the Pubky ecosystem.
+Locks is the authorization-based gating layer for the Pubky ecosystem.
 
 Creators define lock criteria for resources (payment, password, tag, and future proof types). Viewers satisfy criteria, then receive a **homeserver-issued JWT** scoped to the lock-authorized guarded-read capability, issued as an unlock session.
 
@@ -114,7 +114,7 @@ Locks v1 uses the existing Pubky trust posture:
 - **Credible exit preserved**: users can migrate homeservers via pkarr without losing identity.
 - **No trustless claims**: this is not decentralized consensus authorization.
 
-### Why this model
+### 3.1 Why this model
 
 This design intentionally relies on the auth architecture where:
 
@@ -166,9 +166,9 @@ flowchart LR
 
 ## 4. Architecture
 
-## 4.1 Components
+### 4.1 Components
 
-### Creator app + guard service components (same domain)
+#### Creator app + guard service components (same domain)
 - **Lock Policy Store Manager**: manager of homeserver-stored lock policy objects (unsigned in v1).
 - **Lock Guard Service**: verifies proofs and orchestrates unlock tasks.
 - **Verifier Registry**: payment/password/tag/oracle adapters (plugins).
@@ -176,12 +176,12 @@ flowchart LR
 - **Session Issuance Proxy**: forwards session issuance request to homeserver `/session` using current token, Grant + PoP, and guard attestation.
 - **Attestation Signer**: guard signs unlock attestations with its own long-term key.
 
-### Homeservice components
+#### Homeserver components
 - **Homeserver Session Service**: verifies Grant/PoP and mints JWT.
 - **Attestation Verifier**: validates guard signatures and attestation scope.
 - **Policy and password store**: homeserver owns policy writes and password material.
 
-## 4.2 Two-layer model
+### 4.2 Two-layer model
 
 **Layer A: Authorization core (MVP)**
 
@@ -199,7 +199,7 @@ flowchart LR
 
 Layer B must not block Layer A delivery.
 
-## 4.3 Canonical flow (async-first)
+### 4.3 Canonical flow (async-first)
 
 ```
 1. Creator publishes public preview metadata and lock metadata under /pub/.
@@ -210,7 +210,7 @@ Layer B must not block Layer A delivery.
 6. Guard service verifies criteria asynchronously (including polling external proof sources if needed).
 7. Viewer polls unlock task status.
 8. When task is eligible, viewer submits current token + Grant + fresh PoP to POST <creator-guard-origin>/locks/v1/unlock_requests/{task_id}/token.
-9. Guard service signs an UnlockAttestation and proxies POST /session with current token + Grant + PoP + attestation + requested capability.
+9. Guard service signs an UnlockAttestation and proxies POST /session with current token + Grant + PoP + attestation + requested capabilities.
 10. Homeserver verifies attestation (mTLS + guard signature) and issues an unlock access JWT/session; prior sessions remain valid.
 11. Viewer reads guarded payload with Authorization: Bearer <jwt>.
 ```
@@ -235,14 +235,14 @@ Locks v1 standardizes a practical split:
 - `/guarded/` avoids mixed public/guarded behavior in the same object path.
 - Feed and indexer integrations can continue using public metadata while deferring guarded reads to client-authenticated fetches.
 
-### Design trade offs
-- User will need to provide preview material for each app separately
+### Design trade-offs
+- Creators need to provide preview material for each app separately.
 
 ---
 
 ## 6. Core Objects
 
-## 6.1 LockPolicy (v1 unsigned)
+### 6.1 LockPolicy (v1 unsigned)
 
 v1 policies are homeserver-managed objects. They are not creator-signed in MVP.
 
@@ -264,7 +264,7 @@ v1 policies are homeserver-managed objects. They are not creator-signed in MVP.
 | `updated_at` | integer | yes | Unix timestamp |
 | `expires_at` | integer | no | Lock expiration |
 
-## 6.2 ProofBundle
+### 6.2 ProofBundle
 
 Viewer-submitted proofs for an unlock attempt.
 
@@ -281,7 +281,7 @@ Viewer-submitted proofs for an unlock attempt.
 - **Inline proofs** (receipt/challenge response/tag credential)
 - **Proof references** (`ref_uri`, oracle id, external transaction reference)
 
-## 6.3 UnlockTask
+### 6.3 UnlockTask
 
 Asynchronous verification state.
 
@@ -297,7 +297,7 @@ Asynchronous verification state.
 | `updated_at` | integer | yes | Unix timestamp |
 | `expires_at` | integer | yes | Task expiry |
 
-## 6.4 UnlockTokenResponse
+### 6.4 UnlockTokenResponse
 
 
 Returned after successful token exchange for an eligible task.
@@ -312,25 +312,29 @@ Returned after successful token exchange for an eligible task.
 
 The `session` object follows the homeserver session response model and includes `grant_id`, `token_expires_at`, and effective capabilities.
 
-## 6.5 UnlockAttestation
+### 6.5 UnlockAttestation
 
 Guard-signed proof that a specific unlock task is eligible.
 
+Attestations are represented as compact JWS. The table below defines required JWS payload claims.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `v` | integer | yes | `1` |
-| `attestation_id` | string | yes | Unique attestation id |
-| `task_id` | string | yes | Unlock task id |
+| `iss` | string | yes | Guard service public key (`pk:<z32>`); MUST match policy `guard_service_id` |
+| `aud` | string | yes | Target homeserver public key (`pk:<z32>`) |
+| `jti` | string | yes | Unique attestation id |
+| `iat` | integer | yes | Issued-at Unix timestamp |
+| `exp` | integer | yes | Expiry Unix timestamp |
 | `lock_id` | string | yes | Lock id |
+| `task_id` | string | yes | Unlock task id |
 | `viewer` | string | yes | Viewer pubky |
 | `resource_guarded` | string | yes | Guarded resource URI |
 | `caps_requested` | array | yes | Capabilities requested for the new session |
-| `issued_at` | integer | yes | Unix timestamp |
-| `expires_at` | integer | yes | Attestation expiry |
-| `guard_issuer` | string | yes | Guard service public key (`pk:<z32>`) |
-| `sig` | string | yes | Guard signature over canonical form |
+| `result` | string | yes | Eligibility result (`eligible` in v1) |
 
-## 6.6 UnlockAttestation JWS profile (minimal v1)
+The JWS signature is the third compact serialization segment and is not an in-payload field.
+
+### 6.6 UnlockAttestation JWS profile (minimal v1)
 
 UnlockAttestation is transported as compact JWS (`base64url(header).base64url(payload).base64url(sig)`).
 
@@ -377,14 +381,14 @@ UnlockAttestation is transported as compact JWS (`base64url(header).base64url(pa
 
 Locks uses the Grant + PoP + JWT architecture as follows.
 
-## 7.1 Viewer prerequisites
+### 7.1 Viewer prerequisites
 
 Viewer client must hold:
 
 - A valid user-signed Grant (with `cnf` key binding).
 - The corresponding PoP private key.
 
-## 7.2 Unrelated session exchange
+### 7.2 Scoped unlock session exchange
 
 When an unlock task reaches `eligible`, Locks requests a token through the homeserver session endpoint by proxying:
 
@@ -399,15 +403,15 @@ Guard service credentials are service-only and MUST NOT be reused as viewer capa
 Attestation format and validation are defined in **6.6**.
 `current_token` authenticates the viewer to the guard service but does not affect the issued scope.
 
-### Unrelated session rules (mandatory)
+### Scoped unlock session rules (mandatory)
 
 Requested capabilities are not merged with existing sessions.
 
 - If `caps_requested` exceeds Grant capabilities: reject with `REQUESTED_SCOPE_NOT_IN_GRANT`.
 - If valid: homeserver mints an unlock JWT/session with `caps_requested`. Prior sessions remain active.
-- Operation is idempotent on `(grant_id, task_id)`; retries return the same token/session state.
+- Operation is idempotent on `(grant_id, task_id)`; retries return the same token/session status.
 
-## 7.3 v1 requested scope
+### 7.3 v1 requested scope
 
 v1 Locks adds only `single_resource_read` guarded scope.
 
@@ -419,7 +423,7 @@ Canonical capability shape:
 
 No write access and no wildcard expansion beyond the target resource path.
 
-## 7.4 Token lifecycle
+### 7.4 Token lifecycle
 
 - JWT lifetime is short/medium and defined by homeserver policy (Locks `token_ttl_sec` is an input target, capped by homeserver constraints).
 - Revocation follows homeserver session revocation semantics.
@@ -430,14 +434,14 @@ No write access and no wildcard expansion beyond the target resource path.
 
 ## 8. Criteria and Verification Model
 
-## 8.1 v1 criteria
+### 8.1 v1 criteria
 
 - Payment
 - Password (challenge-response)
 
 v2+ extends with tag credentials, crowdwall, oracle-backed checks.
 
-## 8.2 Async verifier execution
+### 8.2 Async verifier execution
 
 Unlock processing is async-first because some proofs are not immediately verifiable.
 
@@ -447,11 +451,11 @@ Examples:
 - Poll third-party oracle/public API.
 - Wait for external confirmation depth.
 
-## 8.3 Idempotency
+### 8.3 Idempotency
 
 Unlock task creation uses idempotency keys to avoid duplicate work and duplicate payment handling.
 
-For payment criteria, repeated submissions of equivalent proof should return the same active unlock state/result instead of creating new charges or duplicated processing.
+For payment criteria, repeated submissions of equivalent proof should return the same active unlock status/result instead of creating new charges or duplicated processing.
 
 ---
 
@@ -486,10 +490,10 @@ Unlock behavior on guard failure:
 
 ## 10. API
 
-Lock guard endpoints are served from the creator app/guard service origin under `/locks/v1/*`.
+Guard service endpoints are served from the creator app/guard service origin under `/locks/v1/*`.
 Homeserver management endpoints remain on the homeserver origin.
 
-## 10.1 Get policy (guard service)
+### 10.1 Get policy (guard service)
 
 ```
 GET <creator-guard-origin>/locks/v1/policy?resource=<pubky-uri>
@@ -501,7 +505,7 @@ Responses:
 - `404` no lock for resource
 - `410` lock/resource removed
 
-## 10.2 Password challenge (guard service)
+### 10.2 Password challenge (guard service)
 
 ```
 GET <creator-guard-origin>/locks/v1/challenge?lock_id=<lock_id>
@@ -517,7 +521,7 @@ Response:
 }
 ```
 
-## 10.3 Create unlock request (guard service)
+### 10.3 Create unlock request (guard service)
 
 ```
 POST <creator-guard-origin>/locks/v1/unlock_requests
@@ -533,24 +537,23 @@ Response:
 
 ```json
 {
-  "status": "accepted",
   "task_id": "...",
-  "state": "pending"
+  "status": "pending"
 }
 ```
 
-## 10.4 Poll unlock request (guard service)
+### 10.4 Poll unlock request (guard service)
 
 ```
-GET <creator-guard-origin>/locks/v1/unlock_requests/<task_id>
+GET <creator-guard-origin>/locks/v1/unlock_requests/{task_id}
 ```
 
-Response includes task state and criterion evaluation progress.
+Response includes task status and criterion evaluation progress.
 
-## 10.5 Exchange eligible task for token (guard service)
+### 10.5 Exchange eligible task for token (guard service)
 
 ```
-POST <creator-guard-origin>/locks/v1/unlock_requests/<task_id>/token
+POST <creator-guard-origin>/locks/v1/unlock_requests/{task_id}/token
 Content-Type: application/json
 
 {
@@ -572,7 +575,7 @@ Behavior:
 
 The attestation is created and transmitted only on the guard-to-homeserver hop; the viewer does not submit it directly.
 
-## 10.6 Creator management endpoints (homeserver)
+### 10.6 Creator management endpoints (homeserver)
 
 Authenticated creator session required.
 
@@ -598,7 +601,7 @@ POST <homeserver-origin>/locks/v1/manage/password
 
 ## 11. Error Model
 
-## 11.1 Unlock task errors
+### 11.1 Unlock task errors
 
 | Code | Meaning |
 |------|---------|
@@ -619,7 +622,7 @@ POST <homeserver-origin>/locks/v1/manage/password
 | `RATE_LIMITED` | Request throttled |
 | `INTERNAL_ERROR` | Internal server failure |
 
-## 11.2 Guarded resource access
+### 11.2 Guarded resource access
 
 - `200` authorized and served
 - `403` unauthorized for any reason (missing, invalid, expired, or insufficient token)
@@ -653,14 +656,14 @@ Indexers may index lock presence/type/price metadata but must not index submitte
 
 ## 13. UX Model
 
-## 13.1 Viewer experience
+### 13.1 Viewer experience
 
 - Feeds show rich previews and lock indicators from `/pub/` metadata.
 - Unlock starts in-app and is async-capable for long-running verification.
 - On success, app receives JWT and fetches guarded payload immediately.
 - If JWT expires, app refreshes through normal Grant + PoP session exchange.
 
-## 13.2 Creator experience
+### 13.2 Creator experience
 
 Recommended creation sequence:
 
@@ -670,7 +673,7 @@ Recommended creation sequence:
 
 This avoids temporary public exposure windows for content intended to be locked.
 
-## 13.3 Zero-interaction direction (post-MVP)
+### 13.3 Zero-interaction direction (post-MVP)
 
 MVP can ship with explicit unlock actions. Longer-term UX target is minimal interaction unlock where clients can proactively satisfy proofs and cache scoped sessions while preserving privacy constraints.
 
@@ -692,7 +695,7 @@ Guard services are independently addressable by `guard_service_id` and `guard_se
 
 ## 15. Implementation Plan
 
-## Deliverable 1: Protocol update (2 weeks)
+### Deliverable 1: Protocol update (2 weeks)
 
 - Freeze unsigned `LockPolicy` v1 schema.
 - Freeze `UnlockTask` and async status model.
@@ -701,7 +704,7 @@ Guard services are independently addressable by `guard_service_id` and `guard_se
 
 Exit criteria: spec stable, examples and test vectors for requested-scope checks and async state transitions.
 
-## Deliverable 2: Homeserver lock guard service (3 weeks)
+### Deliverable 2: Creator-domain guard service + homeserver integration (3 weeks)
 
 - Implement verifier registry and async unlock task engine.
 - Implement `/locks/v1/unlock_requests` lifecycle.
@@ -710,7 +713,7 @@ Exit criteria: spec stable, examples and test vectors for requested-scope checks
 
 Exit criteria: end-to-end unlock to guarded read works with unlock JWT issuance.
 
-## Deliverable 3: App integration (3 weeks)
+### Deliverable 3: App integration (3 weeks)
 
 - Integrate async unlock polling UX.
 - Add Grant + PoP handoff for token exchange.
@@ -719,7 +722,7 @@ Exit criteria: end-to-end unlock to guarded read works with unlock JWT issuance.
 
 Exit criteria: viewer unlocks and reads guarded payload in one flow with no manual token handling.
 
-## Deliverable 4: Wallet/proof adapters (2 weeks)
+### Deliverable 4: Wallet/proof adapters (2 weeks)
 
 - Payment proof adapter(s) for current wallet flow.
 - Proof-reference polling adapter for external systems.
@@ -727,7 +730,7 @@ Exit criteria: viewer unlocks and reads guarded payload in one flow with no manu
 
 Exit criteria: payment unlock is stable under retries and server restarts.
 
-## Deliverable 5: Indexer and feed compatibility (1 week)
+### Deliverable 5: Indexer and feed compatibility (1 week)
 
 - Confirm lock metadata indexing behavior.
 - Confirm locked-preview rendering consistency.
