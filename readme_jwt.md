@@ -16,6 +16,53 @@
 | Access JWT | Homeserver | Server key (Ed25519) | Server keystore/KMS | Short-lived bearer token |
 | API request auth | None (app) | JWT only | N/A | Per-request auth; server checks `jti` session |
 
+## TLDR
+### Auth Roles: Creator vs Viewer
+
+Creator and viewer have different auth paths in Locks v1. Creator is the owner/publisher; viewer is the unlocking consumer.
+
+| Role | Primary responsibility | Unlock flow used? | What they sign | Private key(s) and storage | How `/guarded/...` access is obtained |
+|---|---|---|---|---|---|
+| Creator (owner) | Publish preview metadata, store guarded payload, manage lock policy/password | No (not for own content) | Normal owner auth/session artifacts (not viewer unlock artifacts) | Creator user key (Ed25519) in Ring secure store | Owner access via normal homeserver auth/session |
+| Viewer (consumer) | Prove eligibility and request scoped read token | Yes | Grant (user/Ring signs), PoP proof (viewer app signs) | User key in Ring secure store; PoP key in native keychain/WebCrypto/BFF | Receives scoped unlock JWT after eligible task and successful `/session` exchange |
+| Guard service (creator domain) | Verify criteria and attest unlock eligibility | Service path only | UnlockAttestation (JWS) | Guard service signing key (Ed25519) in server keystore/KMS/HSM | Does not grant direct content access; only attests eligibility |
+| Homeserver | Verify Grant/PoP/attestation, mint and enforce sessions | Session authority | Access JWT | Homeserver signing key (Ed25519) in server keystore/KMS | Grants and enforces JWT capabilities (`caps_requested`, `jti`) |
+
+#### Key rule
+
+- Creator access is owner access.
+- Viewer access is conditional access via unlock.
+- Guard attests eligibility; homeserver mints the actual access token.
+
+### Auth Signing Matrix (Quick Reference)
+
+| Artifact | Signed by | Signing key | Private key storage | Verified by |
+|---|---|---|---|---|
+| Grant (JWS) | User/Ring | User key (Ed25519) | Ring secure store | Homeserver (`/session`) |
+| PoP proof (JWS) | Viewer app | PoP key (Ed25519) | Native keychain / WebCrypto / BFF secret store | Homeserver (`/session`) |
+| UnlockAttestation (JWS) | Guard service | Guard service key (Ed25519) | Guard server keystore/KMS/HSM | Homeserver attestation verifier |
+| Access JWT | Homeserver | Homeserver signing key (Ed25519) | Homeserver keystore/KMS/HSM | Homeserver APIs (session + capability checks) |
+| Guarded API request | No request signature in v1 (Bearer JWT) | N/A | N/A | Homeserver checks JWT validity, `jti`, and capability scope |
+
+### Unlock Auth Sequence (Minimal)
+
+```mermaid
+sequenceDiagram
+  participant V as Viewer App
+  participant G as Guard Service
+  participant H as Homeserver
+  participant R as /guarded API
+
+  V->>G: POST /unlock_requests/{task_id}/token\n(current_token, grant, pop_proof, caps_requested)
+  G->>G: Verify task eligible + scope
+  G->>H: POST /session + UnlockAttestation(JWS)\n(guard-signed, mTLS)
+  H->>H: Verify Grant + PoP + Attestation\nthen mint scoped Access JWT
+  H-->>G: token + session
+  G-->>V: token + session
+  V->>R: GET /guarded/... with Bearer JWT
+  R-->>V: 200 (or 403 if invalid/insufficient)
+```
+
 ## 1. Doctrine
 
 These rules govern design and implementation decisions for Locks v1.
