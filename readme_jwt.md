@@ -7,6 +7,15 @@
 
 ---
 
+## Auth Recap
+
+| Artifact | Who signs | Key | Where private stored | Why/when |
+|---|---|---|---|---|
+| Grant | Ring/user | User key (Ed25519) | Ring secure store | Long-lived app auth + caps + `cnf` |
+| PoP proof | Client app | PoP key (Ed25519) | Native keychain / WebCrypto / BFF | Every `POST /session` |
+| Access JWT | Homeserver | Server key (Ed25519) | Server keystore/KMS | Short-lived bearer token |
+| API request auth | None (app) | JWT only | N/A | Per-request auth; server checks `jti` session |
+
 ## 1. Doctrine
 
 These rules govern design and implementation decisions for Locks v1.
