@@ -49,6 +49,12 @@ Locks described in this proposal is a service that allows content viewers to ret
 
 ## 4. Flow 1: Creator Publishing
 
+> TODO: add signup into homeserver for the Creator App/Service
+
+> Note: for the best UX we basically need atenuation here, so auth needs to be extended:
+> - Payload of `POST /session` needs to accept optional `caps: []` property.
+> - The value of `caps` should be subset of `caps` in **Grant** (validated by homeserver)
+
 ```mermaid
 sequenceDiagram
   participant C as Creator App (Lock App/Serivce)
@@ -58,64 +64,52 @@ sequenceDiagram
   C->>H: PUT /guarded/<id>.json
   H-->>C: 200 OK
 
-  H-->>H: Emit? /events
-
-  Note over C,H: Step 2 — Create lock policy first<br/>(prevents content exposure window)
+  Note over C,H: Step 2 — Create lock policy
   C->>H: PUT /pub/locks/v1/<id>.json
-  H-->>C: 200 {lock_id}
+  H-->>C: 200 OK
 
   H-->>H: Emit /events
 
-  Note over C,H: Step 2 — Publish preview
+  Note over C,H: Step 3 — Publish preview
   C->>H: PUT /pub/<app-id>/posts/<id>.json
   H-->>C: 200 OK
 
   H-->>H: Emit /events
 ```
 
-**Step 1 — Lock policy creation:**
+**Step 1 - Store content:**
+
+Same storing any other blob data 
+
+**Step 2 — Lock policy creation:**
+
+> Lock should be self contained. Meaning that only lock data should be sufficient to unlock and to verify against unlock id
 
 ```json
-PUT <homeserver>/locks/v1/manage
+PUT <homeserver>/locks/v1/<id>.json
 
 {
-  "resource_preview": "pubky://<creator_z32>/pub/<app-id>/posts/<post-id>/meta.json",
-  "resource_guarded": "pubky://<creator_z32>/guarded/<app-id>/posts/<post-id>/payload.json",
+  "resource_guarded": "pubky<creator_z32>/guarded/<id>.json",
   "criteria": [
     {
       "id": "crit_1",
       "type": "payment",
-      "params": { "amount": "50000", "asset": "BTC", "provider": "lightning" }
+      "params": { "amount": "50000", "asset": "BTC", "provider": "lightning" } // FIXME "provider" value 
     }
   ],
   "logic": { "op": "ALL", "criteria_ids": ["crit_1"] },
   "token_ttl_sec": 3600,
-  "guard_service_id": "pk:<guard_z32>",
-  "guard_service_url": "https://guard.example.com"
+  "guard_service_id": "pubky<guard_z32>",
 }
 ```
 
-**Step 2 — Preview metadata with lock signal:**
+**Step 3 — Preview metadata with lock signal:**
 
-```json
-PUT /pub/<app-id>/posts/<post-id>/meta.json
+Same as any post on given app
 
-{
-  "content": "Premium post preview text...",
-  "lock": {
-    "lock_id": "lock_abc123",
-    "types": ["payment"],
-    "amount": "50000",
-    "asset": "BTC",
-    "policy_uri": "pubky://<creator_z32>/pub/<app-id>/locks/policies/lock_abc123.json",
-    "guarded_uri": "pubky://<creator_z32>/guarded/<app-id>/posts/<post-id>/payload.json",
-    "guard_service_id": "pk:<guard_z32>",
-    "guard_service_url": "https://guard.example.com"
-  }
-}
-```
+The content should include link to lock
+`<homeserver>/locks/v1/<id>.json`
 
-**Step 3** — Guarded payload is application-specific content, opaque to Locks.
 
 ---
 
@@ -128,28 +122,34 @@ sequenceDiagram
   participant H as Homeserver
 
   Note over V,H: Discovery
-  V->>H: GET /pub/<app-id>/posts/<id>/meta.json
-  H-->>V: preview + lock signal
+  V->>H: GET /pub/<app-id>/posts/<id>.json
+  H-->>V: preview + lock link
 
-  V->>G: GET /locks/v1/policy?resource=<pubky-uri>
+  V->>G: GET /locks/v1/<id>.json
   G-->>V: LockPolicy JSON
 
   Note over V,G: Proof submission
   V->>G: POST /locks/v1/unlock_requests
   G-->>V: {task_id, status: "pending"}
 
-  Note over V,G: Async polling
+  Note over V,H: Async polling
+  V->>G: GET /locks/v1/unlock_requests/{task_id}
   loop Until eligible or failed
     V->>G: GET /locks/v1/unlock_requests/{task_id}
-    G-->>V: {status}
-  end
+    G-->>V: {status: "in progress"}
 
-  Note over V,H: Token exchange (see Flow 2a for detail)
-  V->>G: POST /locks/v1/unlock_requests/{task_id}/token
-  G-->>V: {token, session}
+    Note over G,G: whatever the process is
+    G-->>G: Verify unlocks <br/> use 3rd party if necessary
+
+    G->>H: POST /session [mTLS]<br/>{grant_id, ...,caps: [/guarded/<id>.json]}
+    H-->>H: Verfiy all the things
+    H-->>H: Mint scoped JWT
+    H-->>G: JWT
+  end
+  G-->>V: {status: "finished", JWT}
 
   Note over V,H: Guarded read
-  V->>H: GET /guarded/... [Bearer JWT]
+  V->>H: GET /guarded/<id>.json [Bearer JWT]
   H-->>V: 200 guarded content (or 403)
 ```
 
@@ -191,6 +191,8 @@ POST <guard>/locks/v1/unlock_requests
 }
 ```
 
+// TODO: make sure nobody else can read it?
+// Alternative return new token on task poll
 **Token exchange request:**
 
 ```json
