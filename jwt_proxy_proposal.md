@@ -7,7 +7,7 @@
 
 ---
 
-## 1. What is Locks
+## 1. What is Locks // REVIEW
 
 Locks is the content gating application for the Pubky ecosystem. Content creators attach criteria like payment, password, or any future proof types to their content. Viewers satisfy those criteria and receive an access to the guarded content.
 
@@ -25,7 +25,7 @@ Locks described in this proposal is a service that allows content viewers to ret
 
 ---
 
-## 2. Glossary
+## 2. Glossary // REVIEW
 
 | Term | Definition |
 |---|---|
@@ -47,13 +47,14 @@ Locks described in this proposal is a service that allows content viewers to ret
 
 ---
 
-## 4. Flow 1: Creator Publishing
+## 2. Flow: Creator Publishing
 
 > TODO: add signup into homeserver for the Creator App/Service
 
 > Note: for the best UX we basically need atenuation here, so auth needs to be extended:
 > - Payload of `POST /session` needs to accept optional `caps: []` property.
 > - The value of `caps` should be subset of `caps` in **Grant** (validated by homeserver)
+> - Otherwise we will need to issue grant for each locked content
 
 ```mermaid
 sequenceDiagram
@@ -61,17 +62,17 @@ sequenceDiagram
   participant H as Homeserver
 
   Note over C,H: Step 1 — Store guarded payload
-  C->>H: PUT /guarded/<id>.json
+  C->>H: PUT /guarded/<id>.json [header: JWT]
   H-->>C: 200 OK
 
   Note over C,H: Step 2 — Create lock policy
-  C->>H: PUT /pub/locks/v1/<id>.json
+  C->>H: PUT /pub/locks/v1/<id>.json [header: JWT]
   H-->>C: 200 OK
 
   H-->>H: Emit /events
 
   Note over C,H: Step 3 — Publish preview
-  C->>H: PUT /pub/<app-id>/posts/<id>.json
+  C->>H: PUT /pub/<app-id>/posts/<id>.json [header: JWT]
   H-->>C: 200 OK
 
   H-->>H: Emit /events
@@ -141,7 +142,7 @@ sequenceDiagram
     Note over G,G: whatever the process is
     G-->>G: Verify unlocks <br/> use 3rd party if necessary
 
-    G->>H: POST /session [mTLS]<br/>{grant_id, ...,caps: [/guarded/<id>.json]}
+    G->>H: POST /session [mTLS]<br/>{grant_id (lock app), pop, ..., caps: [/guarded/<id>.json]}
     H-->>H: Verfiy all the things
     H-->>H: Mint scoped JWT
     H-->>G: JWT
@@ -224,39 +225,6 @@ POST <guard>/locks/v1/unlock_requests/{task_id}/token
 
 ---
 
-## 6. Flow 2a: Guard ↔ Homeserver Attestation Exchange
-
-Zoomed-in view of the token exchange step from Flow 2. This is the critical trust handoff between the guard and the homeserver.
-
-```mermaid
-sequenceDiagram
-  participant V as Viewer App
-  participant G as Guard Service
-  participant H as Homeserver
-
-  V->>G: POST /unlock_requests/{task_id}/token<br/>{current_token, grant, pop_proof, caps_requested}
-
-  Note over G: Validate: task is eligible and not expired
-  Note over G: Validate: caps_requested matches lock scope
-
-  G->>G: Sign UnlockAttestation (JWS)
-
-  G->>H: POST /session [mTLS]<br/>{current_token, grant, pop_proof,<br/>attestation, caps_requested}
-
-  Note over H: Verify mTLS peer = known guard
-  Note over H: Verify JWS signature (guard public key)
-  Note over H: Check: iss = guard_service_id from policy
-  Note over H: Check: aud = homeserver public key
-  Note over H: Check: exp − iat ≤ 30s
-  Note over H: Check: jti is one-time-use (reject replay)
-  Note over H: Check: caps_requested within Grant scope
-  Note over H: Verify Grant signature + PoP proof
-
-  H->>H: Mint scoped Access JWT
-
-  H-->>G: {token, session}
-  G-->>V: {token, session}
-```
 
 **UnlockAttestation JWS structure:**
 
@@ -290,7 +258,7 @@ The viewer never sees or submits the attestation. It is created and consumed ent
 
 ---
 
-## 7. Flow 3: Token Refresh
+## 7. Token Refresh
 
 When a viewer's JWT expires, refresh uses standard Pubky auth. No guard attestation is needed — the session capabilities were already established during the initial unlock.
 
