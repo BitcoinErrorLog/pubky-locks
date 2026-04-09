@@ -9,9 +9,11 @@
 
 ## 1. What is Locks
 
-Locks is the authorization gating layer for the Pubky ecosystem. Creators attach criteria — payment, password, or future proof types — to resources. Viewers satisfy those criteria and receive a homeserver-issued JWT scoped to the specific guarded resource.
+Locks is the content gating application for the Pubky ecosystem. Content creators attach criteria like payment, password, or any future proof types to their content. Viewers satisfy those criteria and receive an access to the guarded content.
 
-Locks does not custody funds, replace Pubky authentication, or provide DRM. It extends homeserver authorization with lock-aware verification through a guard service that attests viewer eligibility.
+Locks does not custody funds or contnet. It does not replace Pubky homeserver or access control managemnt. It does not  provide DRM. Locks extend homeserver authorization with lock-aware verification through a guard service that attests viewer eligibility.
+
+Locks described in this proposal is a service that allows content viewers to retreive homeserver issues JWT token for access of guarded content in exchange of successfully verified proof of matching lock criteria provided by the integrated third party. 
 
 **Non-goals:**
 
