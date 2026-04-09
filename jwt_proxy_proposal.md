@@ -47,78 +47,30 @@ Locks described in this proposal is a service that allows content viewers to ret
 
 ---
 
-## 3. System Overview
-
-### Architecture, Trust Boundaries, and Data Paths
-
-```mermaid
-flowchart TB
-  subgraph VD["Viewer Domain"]
-    V["Viewer App\nholds Grant + PoP key"]
-  end
-
-  subgraph CD["Creator Domain (co-located)"]
-    C["Creator App"]
-    G["Guard Service\nholds Guard signing key (Ed25519)"]
-  end
-
-  subgraph HD["Homeserver Domain"]
-    H["Session Service\n+ Attestation Verifier"]
-    PUB["/pub/*\nmetadata, lock signals, policies"]
-    GRD["/guarded/*\nJWT-scoped content"]
-    DB["Internal DB\naudit records, password material"]
-  end
-
-  C -- "manage locks (authed)" --> H
-  C -- "publish preview + guarded content" --> H
-  V -- "discover previews + policies" --> PUB
-  V -- "submit proofs, poll tasks,\nexchange tokens" --> G
-  G -- "UnlockAttestation +\nsession exchange [mTLS]" --> H
-  G -. "read lock policies" .-> PUB
-  V -- "Bearer JWT" --> GRD
-  H --- PUB
-  H --- GRD
-  H --- DB
-```
-
-### Data Path Summary
-
-| What | Path | Visibility | Written by |
-|---|---|---|---|
-| Preview metadata + lock signal | `/pub/<app-id>/posts/<id>/meta.json` | Public | Creator |
-| Lock policy | `/pub/<app-id>/locks/policies/<lock-id>.json` | Public | Homeserver (via mgmt API) |
-| Guarded payload | `/guarded/<app-id>/posts/<id>/payload.json` | JWT-scoped read | Creator |
-| Audit records, password material | Homeserver internal DB | Private | Homeserver |
-
-### Key Rules
-
-- **Creator access** is owner access — normal homeserver auth, no unlock flow.
-- **Viewer access** is conditional — requires guard attestation for initial session.
-- **Guard** attests eligibility; **homeserver** mints the actual access token.
-- Guard ↔ homeserver communication uses mTLS. Homeserver verifies guard JWS against a known public key.
-- Ring signs Grants offline. Cold key never touches routine API calls.
-- Users can migrate homeservers via pkarr without losing identity (credible exit).
-
----
-
 ## 4. Flow 1: Creator Publishing
 
 ```mermaid
 sequenceDiagram
-  participant C as Creator App
+  participant C as Creator App (Lock App/Serivce)
   participant H as Homeserver
 
-  Note over C,H: Step 1 — Create lock policy first<br/>(prevents content exposure window)
-  C->>H: PUT /locks/v1/manage
+  Note over C,H: Step 1 — Store guarded payload
+  C->>H: PUT /guarded/<id>.json
+  H-->>C: 200 OK
+
+  H-->>H: Emit? /events
+
+  Note over C,H: Step 2 — Create lock policy first<br/>(prevents content exposure window)
+  C->>H: PUT /pub/locks/v1/<id>.json
   H-->>C: 200 {lock_id}
 
-  Note over C,H: Step 2 — Publish preview + lock signal
-  C->>H: PUT /pub/<app-id>/posts/<id>/meta.json
+  H-->>H: Emit /events
+
+  Note over C,H: Step 2 — Publish preview
+  C->>H: PUT /pub/<app-id>/posts/<id>.json
   H-->>C: 200 OK
 
-  Note over C,H: Step 3 — Store guarded payload
-  C->>H: PUT /guarded/<app-id>/posts/<id>/payload.json
-  H-->>C: 200 OK
+  H-->>H: Emit /events
 ```
 
 **Step 1 — Lock policy creation:**
