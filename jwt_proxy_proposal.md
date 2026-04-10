@@ -1,4 +1,4 @@
-# Pubky Locks: Developer Onboarding Brief
+# Pubky Locks: JWT Proxy based proposal
 
 **Version**: 0.3  
 **Date**: April 8, 2026  
@@ -7,25 +7,30 @@
 
 ---
 
-## 1. What is Locks // REVIEW
+## 1. What is Locks
 
-Locks is the content gating application for the Pubky ecosystem. Content creators attach criteria like payment, password, or any future proof types to their content. Viewers satisfy those criteria and receive an access to the guarded content.
+Locks is the content gating application for the Pubky ecosystem. Content creators attach criteria like payment, password, or any future proof types to their content. Viewers  receive an access to the guarded content by satisfying those criteria.
 
-Locks does not custody funds or contnet. It does not replace Pubky homeserver or access control managemnt. It does not  provide DRM. Locks extend homeserver authorization with lock-aware verification through a guard service that attests viewer eligibility.
+## 2. What this proposal is
+Locks described in this proposal is a service that allows content viewers to retreive homeserver issued JWT token for access of guarded content in exchange of successfully verified proof of matching lock criteria provided by the integrated third party. 
 
-Locks described in this proposal is a service that allows content viewers to retreive homeserver issues JWT token for access of guarded content in exchange of successfully verified proof of matching lock criteria provided by the integrated third party. 
+### Goals:
+- Enable lock functionality with minumum distrubance of existing pubky stack elements
+- Simple implementation with clear set of trade-offs and know path for their mitigation 
 
-**Non-goals:**
 
-- Payment processing or custody
-- Replacing base homeserver auth/session infrastructure
-- Trustless enforcement or universal DRM
-- Encrypted delivery (deferred to a future layer)
-- Signed lock policies (deferred)
+### Non-Goals:
+- This document does not cover how exactly unlock criterias are to be verified. They can be implemented as lock specific and can consist of things like:
+  - call to 3rd party REST API with user provided ID
+  - check of bitcoin ledger
+  - check against hash of password
+  - etc
 
 ---
 
-## 2. Glossary // REVIEW
+## 3. Glossary
+
+> TODO: dzdidi check on **UnlockAttestation**
 
 | Term | Definition |
 |---|---|
@@ -33,28 +38,21 @@ Locks described in this proposal is a service that allows content viewers to ret
 | **Grant** | Long-lived JWS signed by user's Ed25519 key, authorizing an app with capability scopes and a `cnf` key binding |
 | **PoP** | Proof of Possession — fresh JWS signed by the app's Ed25519 key, proving the client holds the key bound in the Grant's `cnf` claim |
 | **Homeserver** | User's data server; stores content, enforces capabilities, mints JWT access tokens |
-| **Guard Service** | Verification service co-located with the creator app domain; verifies unlock criteria and signs attestations |
+| **Guard Service** | Verification service co-located with the creator app domain; verifies unlock criteria and exchanges them for JWT |
 | **Lock Policy** | Public object defining criteria required to access a guarded resource |
 | **UnlockAttestation** | Guard-signed JWS proving a specific viewer is eligible for a specific lock |
 | **UnlockTask** | Async state machine tracking verification progress for an unlock attempt |
 | **ProofBundle** | Viewer-submitted proofs or proof references for an unlock attempt |
 | **Capability (cap)** | Scoped permission string in a JWT session (e.g., `/guarded/<path>:r`) |
-| **pkarr** | DNS-like resolution layer for Pubky identities |
-| **z32** | Base32 encoding for Pubky public keys |
 | **mTLS** | Mutual TLS; guard and homeserver authenticate each other's certificates |
 | **JWS** | JSON Web Signature (compact serialization) |
 | **JWT** | JSON Web Token; short-lived bearer token for API access |
 
 ---
 
-## 2. Flow: Creator Publishing
+## 4. Flow: Creator Publishing
 
-> TODO: add signup into homeserver for the Creator App/Service
-
-> Note: for the best UX we basically need atenuation here, so auth needs to be extended:
-> - Payload of `POST /session` needs to accept optional `caps: []` property.
-> - The value of `caps` should be subset of `caps` in **Grant** (validated by homeserver)
-> - Otherwise we will need to issue grant for each locked content
+Content is created through specific app which is authentorized by user to write into `pub/guarded/`. 
 
 ```mermaid
 sequenceDiagram
@@ -78,16 +76,25 @@ sequenceDiagram
   H-->>H: Emit /events
 ```
 
-**Step 1 - Store content:**
+> TODO: add signup into homeserver for the Creator App/Service
 
-Same storing any other blob data 
+> Note: for the best UX we basically need atenuation here, so auth needs to be extended:
+> - Payload of `POST /session` needs to accept optional `caps: []` property.
+> - The value of `caps` should be subset of `caps` in **Grant** (validated by homeserver)
+> - Otherwise we will need to issue grant for each locked content
 
-**Step 2 — Lock policy creation:**
 
-> Lock should be self contained. Meaning that only lock data should be sufficient to unlock and to verify against unlock id
+
+### 4.1 **Step 1 - Store content:**
+
+Same as storing any other blob data. Because this content is not expected to be indexed it can have arbitrary structure.
+
+### 4.2 **Step 2 — Lock policy creation:**
+
+> TODO: The `criteria.params` needs to be figured out. 
 
 ```json
-PUT <homeserver>/locks/v1/<id>.json
+PUT <creator id>/locks/v1/<id>.json
 
 {
   "resource_guarded": "pubky<creator_z32>/guarded/<id>.json",
@@ -95,7 +102,7 @@ PUT <homeserver>/locks/v1/<id>.json
     {
       "id": "crit_1",
       "type": "payment",
-      "params": { "amount": "50000", "asset": "BTC", "provider": "lightning" } // FIXME "provider" value 
+      "params": { "amount": "50000", "asset": "BTC", "provider": "paykit" } 
     }
   ],
   "logic": { "op": "ALL", "criteria_ids": ["crit_1"] },
@@ -104,15 +111,17 @@ PUT <homeserver>/locks/v1/<id>.json
 }
 ```
 
-**Step 3 — Preview metadata with lock signal:**
+### 4.3 **Step 3 — Preview metadata:**
 
-Same as any post on given app
-
-The content should include link to lock
-`<homeserver>/locks/v1/<id>.json`
+Same as any post on given app. The content should include link to lock in an unstructured manner. For example it can be pasted as a part of text in post `pubky<user public key>/locks/v1/<id>.json`
 
 
 ---
+
+> Note: we could not include grant to access specific locked content here is every creation would require one new signaure 
+
+> Instead there is on general grant for application that has capabilities `[/guarded/:rw]` and then make PoP request with specific narrowed down capabilities  `[/guarded/<id>:r]`
+
 
 ## 5. Flow 2: Viewer Unlock
 
@@ -129,33 +138,40 @@ sequenceDiagram
   V->>G: GET /locks/v1/<id>.json
   G-->>V: LockPolicy JSON
 
-  Note over V,G: Proof submission
+  Note over V,G: Proof submission (5.1)
   V->>G: POST /locks/v1/unlock_requests
   G-->>V: {task_id, status: "pending"}
 
-  Note over V,H: Async polling
-  V->>G: GET /locks/v1/unlock_requests/{task_id}
+  Note over V,H: Async polling.<br/>Needs to be secure to avoid MITM and replays
   loop Until eligible or failed
+    Note over V,G: check status (5.2)
     V->>G: GET /locks/v1/unlock_requests/{task_id}
     G-->>V: {status: "in progress"}
 
     Note over G,G: whatever the process is
     G-->>G: Verify unlocks <br/> use 3rd party if necessary
 
-    G->>H: POST /session [mTLS]<br/>{grant_id (lock app), pop, ..., caps: [/guarded/<id>.json]}
-    H-->>H: Verfiy all the things
-    H-->>H: Mint scoped JWT
-    H-->>G: JWT
   end
-  G-->>V: {status: "finished", JWT}
+
+
+  V->>G: GET /locks/v1/unlock_requests/{task_id}/token
+
+  Note over G,H: Basically standard session refreesh but with downscoped capabilities (5.3)
+  G->>H: POST /session<br/>{grant_id (lock app), pop, ..., caps: [/guarded/<id>.json]}
+  H-->>H: Verfiy all the things
+  H-->>H: Mint scoped JWT
+  H-->>G: JWT
+
+  G-->>V: JWT
 
   Note over V,H: Guarded read
   V->>H: GET /guarded/<id>.json [Bearer JWT]
   H-->>V: 200 guarded content (or 403)
 ```
 
-**Proof submission request:**
+### 5.1. **Proof submission:**
 
+#### 5.1.a Request
 ```json
 POST <guard>/locks/v1/unlock_requests
 
@@ -163,45 +179,74 @@ POST <guard>/locks/v1/unlock_requests
   "proof_bundle": {
     "v": 1,
     "lock_id": "lock_abc123",
-    "viewer": "pk:<viewer_z32>",
+    "viewer": "<viewer_z32>",
     "proofs": [
       {
         "criterion_id": "crit_1",
         "type": "payment",
-        "ref_uri": "lightning:invoice_ref_xyz"
+        "ref_uri": "paykit:invoice_ref_xyz"
       }
     ],
     "client_time": 1769500100
   },
-  "idempotency_key": "idem_viewer123_lock_abc123"
 }
 ```
 
-**Task poll response (eligible):**
+#### 5.1.b Response
+```json
+{
+  "task_id": "<task_id>",
+  "status": "<pending>",
+  // security related payload
+  ...
+}
+```
+
+### 5.2 **Async polling**:
+
+#### 5.2.a Request:
+```json
+GET <guard>/locks/v1/unlock_requests/<tastk id>
+```
+
+#### 5.2.b Response:
+
+```json
+POST <guard>/locks/v1/unlock_requests/<tastk id>
+
+{
+  "status": "in progress|complete|failed|rejected"
+}
+```
+
+### 5.3 Proof polling ()
+
+### 5.4 **Task poll response (eligible):**
 
 ```json
 {
   "task_id": "task_def456",
   "lock_id": "lock_abc123",
-  "viewer": "pk:<viewer_z32>",
+  "viewer": "<viewer_z32>",
   "status": "eligible",
   "passed_criteria": ["crit_1"],
   "created_at": 1769500100,
   "updated_at": 1769500120,
   "expires_at": 1769500400
+  // whatever is necessary for security against MITM and replays
 }
 ```
 
 // TODO: make sure nobody else can read it?
 // Alternative return new token on task poll
-**Token exchange request:**
+### 5.3 **Token exchange request:**
 
 ```json
 POST <guard>/locks/v1/unlock_requests/{task_id}/token
 
 {
-  "current_token": "<existing_jwt>",
-  "grant": "<user_signed_grant_jws>",
+  "current_token": "<existing_jwt>", // not needed
+  "grant": "<user_signed_grant_jws>", // not needed
   "pop_proof": "<fresh_pop_jws>",
   "caps_requested": ["/guarded/<app-id>/posts/<post-id>/payload.json:r"]
 }
