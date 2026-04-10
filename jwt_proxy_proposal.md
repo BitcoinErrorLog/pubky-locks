@@ -142,7 +142,7 @@ sequenceDiagram
   V->>G: POST /locks/v1/unlock_requests
   G-->>V: {task_id, status: "pending"}
 
-  Note over V,H: Async polling.<br/>Needs to be secure to avoid MITM and replays
+  Note over V,G: Async polling
   loop Until eligible or failed
     Note over V,G: check status (5.2)
     V->>G: GET /locks/v1/unlock_requests/{task_id}
@@ -153,16 +153,16 @@ sequenceDiagram
 
   end
 
-
+  Note over V,G: This should be authenticated/secure
   V->>G: GET /locks/v1/unlock_requests/{task_id}/token
+  G-->>V: { grant_id (locker apps grant issued by content creator), pop, ..., caps: [/guareded/<id>.json:r]}
 
-  Note over G,H: Basically standard session refreesh but with downscoped capabilities (5.3)
-  G->>H: POST /session<br/>{grant_id (lock app), pop, ..., caps: [/guarded/<id>.json]}
+  Note over V,H: Basically standard session refreesh but with downscoped capabilities (5.3)
+  V->>H: POST /session<br/>payload returned by guard service 
+
   H-->>H: Verfiy all the things
   H-->>H: Mint scoped JWT
-  H-->>G: JWT
-
-  G-->>V: JWT
+  H-->>V: JWT
 
   Note over V,H: Guarded read
   V->>H: GET /guarded/<id>.json [Bearer JWT]
