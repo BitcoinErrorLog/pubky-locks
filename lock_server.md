@@ -65,20 +65,20 @@ Lock server provides secure communication with Viewer Application.
 2. Content creator uploads content to be guarded to their homeserver under `/guarded/<content_id>` (no `/events` entry on homeserver as it is private endpoint)
 3. Content creator defines lock conditions and uploads lock conditions to homeserver `/pub/locks.app/<lock_id>` (triggers `/events` entry on homeserver)
     1. Alternatively, lock service url can be stored in  `/pub/locks.app/config.json`:
-```json
-{
-    "locks_service_url": "<z32 public key of the lock server>/<creator_id>/unlock/<lock_id>"
-}
-```
+    ```json
+    {
+        "locks_service_url": "<z32 public key of the lock server>/<creator_id>/unlock/<lock_id>"
+    }
+    ```
     2. More crazy alternative is to store in user's pkarr record as:
-```
-_pubky HTTPS <homeserver public key>
-_locks HTTPS <lock server public key>
-```
+    ```
+    _pubky HTTPS <homeserver public key>
+    _locks HTTPS <lock server public key>
+    ```
 4. Content creator creates "preview" post anywhere (like on a pubky.app post)
-```
-Check out my locked content at `pubky<user public key>/pub/locks.app/<lock_id>`
-```
+    ```
+    Check out my locked content at `pubky<user public key>/pub/locks.app/<lock_id>`
+    ```
 
 ##### Diagram 3.1 (simplified)
 
