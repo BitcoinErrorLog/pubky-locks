@@ -146,12 +146,14 @@ sequenceDiagram
   loop Until eligible or failed
     Note over V,G: check status (5.2)
     V->>G: GET /locks/v1/unlock_requests/{task_id}
-    G-->>V: {status: "in progress"}
+    G-->>V: {task_id, status: "in progress"}
 
     Note over G,G: whatever the process is
     G-->>G: Verify unlocks <br/> use 3rd party if necessary
 
   end
+
+  G-->>V: {task_id, status: "completed"}
 
   Note over V,G: This should be authenticated/secure
   V->>G: GET /locks/v1/unlock_requests/{task_id}/token
