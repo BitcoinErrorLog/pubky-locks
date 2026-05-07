@@ -1,101 +1,213 @@
-# Pubky Locks: JWT Proxy based proposal
+# Pubky Locks: Auth restricted proxy pass for locked content
 
-**Version**: 0.3  
-**Date**: April 8, 2026  
+**Version**: 0.4  
+**Date**: April 10, 2026  
 **Status**: Draft  
-**Author**: John Carvalho / Synonym
+**Author**: Synonym
 
 ---
 
-## 1. What is Locks
+## 1\. Intro
 
-Locks is the content gating application for the Pubky ecosystem. Content creators attach criteria like payment, password, or any future proof types to their content. Viewers  receive an access to the guarded content by satisfying those criteria.
+### 1.1. What are Locks
 
-## 2. What this proposal is
-Locks described in this proposal is a service that allows content viewers to retreive homeserver issued JWT token for access of guarded content in exchange of successfully verified proof of matching lock criteria provided by the integrated third party. 
+Locks is the content gating application for the Pubky ecosystem. Content creators attach criteria like payment, password, or any other future-proof types to their content. Viewers receive access to the guarded content by satisfying those criteria.
 
-### Goals:
-- Enable lock functionality with minumum distrubance of existing pubky stack elements
-- Simple implementation with clear set of trade-offs and know path for their mitigation 
+### 1.2. What this proposal is not
 
+This proposal does not provide any insight into how locks can be verified. Neither it provides extensive list of possible locks. Each unique lock type will be added separately and its verification will be dependent on the nature of the specific lock. Also this proposal does not specify the type of secure communication between Viewer App and Lock Service. The security of communication between Content Reader and Lock Service is out of scope at it is something that can be solved with existing methods of secure client-server communication.
+The paths and payloads indicated in this document are for two purposes suggestion and example thefore may changed and reconsidered also subject to optimizations. 
 
-### Non-Goals:
-- This document does not cover how exactly unlock criterias are to be verified. They can be implemented as lock specific and can consist of things like:
-  - call to 3rd party REST API with user provided ID
-  - check of bitcoin ledger
-  - check against hash of password
-  - etc
+### 1.3. Goals
 
----
+Design of this proposal was created with the following goals
 
-## 3. Glossary
+- Enable lock functionality with minimum disturbance of existing pubky stack elements  
+- Simple implementation with clear set of trade-offs and known path for their mitigation  
+- Locks should be delivered into pubky ecosystem without disturbance of existing trust assumptions  
+- Locks implementation should fit into existing narrative of the credible exit
 
-> TODO: dzdidi check on **UnlockAttestation**
+### 1.4 Usecases to consider
+- Individual items behind a paywall
+- All items behind a subscription
+- A password-protected item
+- An item available for a limited time (relative or absolute)
+- An item available to a limited number of users (first 10 users can access)
+- An item available only to followers
 
-| Term | Definition |
-|---|---|
-| **Ring** | Secure key management component; signs Grants on behalf of the user |
-| **Grant** | Long-lived JWS signed by user's Ed25519 key, authorizing an app with capability scopes and a `cnf` key binding |
-| **PoP** | Proof of Possession — fresh JWS signed by the app's Ed25519 key, proving the client holds the key bound in the Grant's `cnf` claim |
-| **Homeserver** | User's data server; stores content, enforces capabilities, mints JWT access tokens |
-| **Guard Service** | Verification service co-located with the creator app domain; verifies unlock criteria and exchanges them for JWT |
-| **Lock Policy** | Public object defining criteria required to access a guarded resource |
-| **UnlockAttestation** | Guard-signed JWS proving a specific viewer is eligible for a specific lock |
-| **UnlockTask** | Async state machine tracking verification progress for an unlock attempt |
-| **ProofBundle** | Viewer-submitted proofs or proof references for an unlock attempt |
-| **Capability (cap)** | Scoped permission string in a JWT session (e.g., `/guarded/<path>:r`) |
-| **mTLS** | Mutual TLS; guard and homeserver authenticate each other's certificates |
-| **JWS** | JSON Web Signature (compact serialization) |
-| **JWT** | JSON Web Token; short-lived bearer token for API access |
+## 2\. Proposal
 
----
+### 2.1 Terminology
 
-## 4. Flow: Creator Publishing
+**Locks Server** is a pubky ecosystem application from the perspective of permissions and authentication. Meaning it has permissions to write to homeserver based on user signed grant. For more details see [JWT-Auth-proposal](https://github.com/pubky/pubky-core-braindump-jan2026/blob/jwt-auth-update/proposals/jwt-session/proposal-v4-pop.md) From the traditional web point of view it is a server which may or may not have a user interface. User interface is desired though for human readable representation of the lock file content.  
+**Content creator** is a user of the pubky ecosystem who creates content which they want to put "behind lock". Meaning that content can be available only to content viewers.  
+**Content viewers** are users (not necessarily account holders) of the pubky ecosystem who are able to provide satisfactory proofs to "locking criteria"  
+**Content lock** is structured data which specifies criteria for accessing content behind lock  
+**Proof bundle** is structured data which provides all the necessary information to locks server regarding satisfaction of criteria specified in content lock
 
-Content is created through specific app which is authentorized by user to write into `pub/guarded/`. 
+### 2.2 Lock server
 
-```mermaid
-sequenceDiagram
-  participant C as Creator App (Lock App/Serivce)
-  participant H as Homeserver
+Lock server as a pubky application provides optional functionality for content creator to:
 
-  Note over C,H: Step 1 — Store guarded payload
-  C->>H: PUT /guarded/<id>.json [header: JWT]
-  H-->>C: 200 OK
+- Create content at `/guarded/*` in creator's homeserver  
+- Create content at `/pub/locks.app/*` for content creator 
 
-  Note over C,H: Step 2 — Create lock policy
-  C->>H: PUT /pub/locks/v1/<id>.json [header: JWT]
-  H-->>C: 200 OK
+Alternatively content creators can do this using any other methods available.
 
-  H-->>H: Emit /events
+Lock server as a pubky application provides functionality for content viewer to:
 
-  Note over C,H: Step 3 — Publish preview
-  C->>H: PUT /pub/<app-id>/posts/<id>.json [header: JWT]
-  H-->>C: 200 OK
+- Accept and verify viewer's proof bundles  
+- Proxy read content from `pubky<creator_public_key>/guarded/<content_id>`
 
-  H-->>H: Emit /events
+Lock server requires the following capabilities authorized by the content creator `[/guarded/:r]`. Optionally it may have up to `[/guarded/:rw,/pub/locks.app/:rw]` in case locks are to be created through it.
+
+Lock server has own pkarr record just like homeserver:
+
+```
+@    A    <IP>
+@    HTTPS    <domain name>
+...
 ```
 
-> TODO: add signup into homeserver for the Creator App/Service
+Lock server provides secure communication with Viewer Application.
 
-> Note: for the best UX we basically need atenuation here, so auth needs to be extended:
-> - Payload of `POST /session` needs to accept optional `caps: []` property.
-> - The value of `caps` should be subset of `caps` in **Grant** (validated by homeserver)
-> - Otherwise we will need to issue grant for each locked content
+## 3\. Flow and diagrams
 
+### 3.1 Content creation
 
+#### Flow 3.1
 
-### 4.1 **Step 1 - Store content:**
-
-Same as storing any other blob data. Because this content is not expected to be indexed it can have arbitrary structure.
-
-### 4.2 **Step 2 — Lock policy creation:**
-
-> TODO: The `criteria.params` needs to be figured out. 
+1. Content creator authorizes app for writing to homeserver  
+2. Content creator uploads content to be guarded to their homeserver under `/guarded/<content_id>` (no `/events` entry on homeserver as it is private endpoint)  
+3. Content creator defines lock conditions and uploads lock conditions to homeserver `/pub/locks.app/<lock_id>` (triggers `/events` entry on homeserver)  
+   1. Alternatively, lock service url can be stored in  `/pub/locks.app/config.json`:
 
 ```json
-PUT <creator id>/locks/v1/<id>.json
+{
+    "locks_service_url": "<z32 public key of the lock server>/<creator_id>/unlock/<lock_id>"
+}
+```
 
+   2. More risky alternative is to store in user's pkarr record as:
+
+```
+_pubky HTTPS <homeserver public key>
+_locks HTTPS <lock server public key>
+```
+
+4. Content creator creates "preview" post anywhere (like on a pubky.app post)
+
+```
+Check out my locked content at `pubky<user public key>/pub/locks.app/<lock_id>`
+```
+
+#### Diagram 3.1 (simplified)
+
+
+```
+sequenceDiagram
+  participant C as Content Creator App
+  participant H as Homeserver
+
+  Note over C,H: Step 1: Authorize with Grant
+  C->>H: POST /session
+  H-->>C: 200 JWT
+
+  Note over C,H: Step 2: Store guarded payload
+  C->>H: PUT /guarded/<id> [header: JWT]
+  H-->>C: 200 OK
+
+  Note over C,H: Step 3: Create lock policy (see 4.1)
+  C->>H: PUT /pub/locks.app/<lock_id> [header: JWT]
+  H-->>C: 200 OK
+
+  H-->>H: Emit /events
+
+  Note over C,H: Step 4: Publish preview
+  C->>H: PUT /pub/<app-id>/posts/<id> [header: JWT]
+  H-->>C: 200 OK
+
+  H-->>H: Emit /events
+
+```
+
+### 3.2 Content retrieval
+
+#### Flow 3.2
+
+1. Viewer discovers lock either through "preview" post or via `/events` endpoint (missing context in the latter case)  
+2. Viewer gets "unlock conditions" by reading public `/pub/locks.app/<lock_id>` from the homeserver (alternatively requires one more read of the `/pub/locks.app/config.json` or more elaborate pkarr record parsing). To provide convenient UX it may be desired for Locks App to have some form of white labled UI which can either be used as is or embeded into other services
+3. Viewer "solves the lock"  
+4. Viewer "provides the proof bundle" to `PUT <z32 public key of the lock server>/<creator_id>/unlock/<lock_id>` (from step 2\) together with cryptographically secure filename of where proof bundle should be stored for the future reference of the reader. This will be useful in case of Lock Service migration as proof that bundle has been submitted already as well as proof of time when it was submitted.  
+5. Viewer polls verification status `GET <z32 public key of the lock server>/<creator_id>/unlock/<lock_id>`  
+6. Lock server:  
+   1. Reads lock conditions `<creator_id>/pub/locks.app/<lock_id>`  
+   2. "verifies the proof" or checks existing bundle under given location  
+   3. In case of success it creates "unlock URL" `<z32 public key of the lock server>/<creator_id>/view/<lock_id>` and shares it with Viewer  
+7. Viewer sends request to "unlock URL" `<z32 public key of the lock server>/<creator_id>/view/<lock_id>`  
+8. Lock server proxy-get request to homeserver and proxy-pass response to Viewer using own JWT
+
+#### Diagram 3.2
+
+```
+sequenceDiagram
+  participant V as Viewer App
+  participant L as Lock Server
+  participant H as Homeserver
+
+  Note over V,H: Step 1: Discovery
+  V->>H: GET /pub/<app_id>/posts/<id>
+  H-->>V: preview + lock link
+
+  Note over V,H: Step 2: Get unlock conditions
+  V->>H: GET /pub/locks.app/<lock_id>
+  H-->>V: LockPolicy JSON (see 4.1)
+
+  Note over V,V: Step 3: Lock specific process
+  V->>V: unlock
+
+  Note over V,L: Step 4: Proof bundle submission (4.2)
+  V->>L: PUT <z32 public key of the lock server>/<creator_id>/unlock/<lock_id>
+  L-->>V: {task_id, status: "pending", bundle_url: "<unique and secure pubky resource of bundle>"}
+
+  Note over V,H: Async polling
+  loop Until eligible or failed
+    Note over V,L: Step 5: check status
+    V->>L: GET <z32 public key of the lock server>/<creator_id>/unlock/<lock_id>?bundle_id=<bundle_id>
+    L-->>V: {task_id, status: "in progress"}
+
+    Note over L,L: Step 6: Lock specific verification process
+    L-->>H: Get lock conditions
+    Note over L,L: Verify proof
+    L-->>L: Use 3rd party if necessary
+  end
+
+  Note over V,L: Last poll
+  V->>L: GET <z32 public key of the lock server>/<creator_id>/unlock/<lock_id>?bundle_id=<bundle_id>
+
+  Note over L,V: Step 6.3: create proxy read url
+  L-->>V: {task_id, status: "completed", access_url: "<z32 public key of the lock server>/<creator_id>/view/<lock_id>"}
+
+  Note over V,L: Step 7:
+  V->>L: GET <z32 public key of the lock server>/<creator_id>/view/<lock_id>
+  V->>V: confirm unlocked
+  L->>H: GET /guarded/<id> [header JWT] 
+  H-->>L: { 200 OK }
+  L-->>V: { 200 OK }
+```
+
+### 3.3 Lock service migration (credible exit)
+
+1. Revoke `locks.app` session (`/guarded/:r`)  
+2. All `/pub/locks.app/<lock_id>` need to have the `"locks_service_url"` updated to a new one  
+- alternatively, in `/pub/locks.app/config.json`  
+- alternatively, in pkarr record
+
+## 4\. Payload examples
+
+### 4.1 Lock policy
+
+```json
 {
   "resource_guarded": "pubky<creator_z32>/guarded/<id>.json",
   "criteria": [
@@ -107,449 +219,22 @@ PUT <creator id>/locks/v1/<id>.json
   ],
   "logic": { "op": "ALL", "criteria_ids": ["crit_1"] },
   "token_ttl_sec": 3600,
-  "guard_service_id": "pubky<guard_z32>",
+  "locks_service_url": "<z32 public key of the lock server>/<creator_id>/unlock/<lock_id>"
 }
 ```
 
-### 4.3 **Step 3 — Preview metadata:**
+### 4.2 Proof bundle
 
-Same as any post on given app. The content should include link to lock in an unstructured manner. For example it can be pasted as a part of text in post `pubky<user public key>/locks/v1/<id>.json`
-
-
----
-
-> Note: we could not include grant to access specific locked content here is every creation would require one new signaure 
-
-> Instead there is on general grant for application that has capabilities `[/guarded/:rw]` and then make PoP request with specific narrowed down capabilities  `[/guarded/<id>:r]`
-
-
-## 5. Flow 2: Viewer Unlock
-
-```mermaid
-sequenceDiagram
-  participant V as Viewer App
-  participant G as Guard Service
-  participant H as Homeserver
-
-  Note over V,H: Discovery
-  V->>H: GET /pub/<app-id>/posts/<id>.json
-  H-->>V: preview + lock link
-
-  V->>G: GET /locks/v1/<id>.json
-  G-->>V: LockPolicy JSON
-
-  Note over V,G: Proof submission (5.1)
-  V->>G: POST /locks/v1/unlock_requests
-  G-->>V: {task_id, status: "pending"}
-
-  Note over V,G: Async polling
-  loop Until eligible or failed
-    Note over V,G: check status (5.2)
-    V->>G: GET /locks/v1/unlock_requests/{task_id}
-    G-->>V: {task_id, status: "in progress"}
-
-    Note over G,G: whatever the process is
-    G-->>G: Verify unlocks <br/> use 3rd party if necessary
-
-  end
-
-  G-->>V: {task_id, status: "completed"}
-
-  Note over V,G: This should be authenticated/secure
-  V->>G: GET /locks/v1/unlock_requests/{task_id}/token
-  G-->>V: { grant_id (locker apps grant issued by content creator), pop, ..., caps: [/guareded/<id>.json:r]}
-
-  Note over V,H: Basically standard session refreesh but with downscoped capabilities (5.3)
-  V->>H: POST /session<br/>payload returned by guard service 
-
-  H-->>H: Verfiy all the things
-  H-->>H: Mint scoped JWT
-  H-->>V: JWT
-
-  Note over V,H: Guarded read
-  V->>H: GET /guarded/<id>.json [Bearer JWT]
-  H-->>V: 200 guarded content (or 403)
-```
-
-### 5.1. **Proof submission:**
-
-#### 5.1.a Request
 ```json
-POST <guard>/locks/v1/unlock_requests
-
 {
   "proof_bundle": {
-    "v": 1,
-    "lock_id": "lock_abc123",
-    "viewer": "<viewer_z32>",
     "proofs": [
       {
         "criterion_id": "crit_1",
-        "type": "payment",
         "ref_uri": "paykit:invoice_ref_xyz"
+        "bundle_id": "uuid-v4 bundle id"
       }
-    ],
-    "client_time": 1769500100
-  },
+    ]
+  }
 }
 ```
-
-#### 5.1.b Response
-```json
-{
-  "task_id": "<task_id>",
-  "status": "<pending>",
-  // security related payload
-  ...
-}
-```
-
-### 5.2 **Async polling**:
-
-#### 5.2.a Request:
-```json
-GET <guard>/locks/v1/unlock_requests/<tastk id>
-```
-
-#### 5.2.b Response:
-
-```json
-POST <guard>/locks/v1/unlock_requests/<tastk id>
-
-{
-  "status": "in progress|complete|failed|rejected"
-}
-```
-
-### 5.3 Proof polling ()
-
-### 5.4 **Task poll response (eligible):**
-
-```json
-{
-  "task_id": "task_def456",
-  "lock_id": "lock_abc123",
-  "viewer": "<viewer_z32>",
-  "status": "eligible",
-  "passed_criteria": ["crit_1"],
-  "created_at": 1769500100,
-  "updated_at": 1769500120,
-  "expires_at": 1769500400
-  // whatever is necessary for security against MITM and replays
-}
-```
-
-// TODO: make sure nobody else can read it?
-// Alternative return new token on task poll
-### 5.3 **Token exchange request:**
-
-```json
-POST <guard>/locks/v1/unlock_requests/{task_id}/token
-
-{
-  "current_token": "<existing_jwt>", // not needed
-  "grant": "<user_signed_grant_jws>", // not needed
-  "pop_proof": "<fresh_pop_jws>",
-  "caps_requested": ["/guarded/<app-id>/posts/<post-id>/payload.json:r"]
-}
-```
-
-**Token exchange response:**
-
-```json
-{
-  "status": "ok",
-  "token": "<jwt_access_token>",
-  "session": {
-    "grant_id": "<grant_id>",
-    "token_expires_at": 1769503720,
-    "capabilities": ["/guarded/<app-id>/posts/<post-id>/payload.json:r"]
-  },
-  "issued_session_jti": "sess_jkl012",
-  "task_id": "task_def456"
-}
-```
-
----
-
-
-**UnlockAttestation JWS structure:**
-
-```
-base64url(header).base64url(payload).base64url(signature)
-```
-
-Header:
-```json
-{ "alg": "EdDSA", "typ": "pubky-locks-attestation" }
-```
-
-Payload:
-```json
-{
-  "iss": "pk:<guard_z32>",
-  "aud": "pk:<homeserver_z32>",
-  "jti": "att_ghi789",
-  "iat": 1769500120,
-  "exp": 1769500150,
-  "lock_id": "lock_abc123",
-  "task_id": "task_def456",
-  "viewer": "pk:<viewer_z32>",
-  "resource_guarded": "pubky://<creator_z32>/guarded/<app-id>/posts/<post-id>/payload.json",
-  "caps_requested": ["/guarded/<app-id>/posts/<post-id>/payload.json:r"],
-  "result": "eligible"
-}
-```
-
-The viewer never sees or submits the attestation. It is created and consumed entirely on the guard-to-homeserver hop.
-
----
-
-## 7. Token Refresh
-
-When a viewer's JWT expires, refresh uses standard Pubky auth. No guard attestation is needed — the session capabilities were already established during the initial unlock.
-
-```mermaid
-sequenceDiagram
-  participant V as Viewer App
-  participant H as Homeserver
-
-  V->>H: GET /guarded/... [Bearer expired-JWT]
-  H-->>V: 403 Forbidden
-
-  Note over V: Detect expired token
-
-  V->>H: POST /session<br/>{grant, fresh pop_proof, caps_requested}
-  H->>H: Verify Grant + PoP
-  H->>H: Mint new Access JWT
-  H-->>V: {token, session}
-
-  V->>H: GET /guarded/... [Bearer new-JWT]
-  H-->>V: 200 guarded content
-```
-
-No guard involvement. The Grant already includes the guarded-read capability scope; the homeserver reissues a session with those capabilities on valid Grant + PoP.
-
----
-
-## 8. Key Data Formats
-
-### LockPolicy
-
-Stored at `/pub/<app-id>/locks/policies/<lock-id>.json`. Unsigned in v1 (homeserver-managed).
-
-```json
-{
-  "v": 1,
-  "lock_id": "lock_abc123",
-  "creator": "pk:<creator_z32>",
-  "resource_preview": "pubky://<creator_z32>/pub/<app-id>/posts/<post-id>/meta.json",
-  "resource_guarded": "pubky://<creator_z32>/guarded/<app-id>/posts/<post-id>/payload.json",
-  "criteria": [
-    {
-      "id": "crit_1",
-      "type": "payment",
-      "params": { "amount": "50000", "asset": "BTC", "provider": "lightning" }
-    }
-  ],
-  "logic": { "op": "ALL", "criteria_ids": ["crit_1"] },
-  "token_ttl_sec": 3600,
-  "token_scope": "single_resource_read",
-  "guard_service_id": "pk:<guard_z32>",
-  "guard_service_url": "https://guard.example.com",
-  "created_at": 1769500000,
-  "updated_at": 1769500000
-}
-```
-
-### ProofBundle
-
-```json
-{
-  "v": 1,
-  "lock_id": "lock_abc123",
-  "viewer": "pk:<viewer_z32>",
-  "proofs": [
-    {
-      "criterion_id": "crit_1",
-      "type": "payment",
-      "ref_uri": "lightning:invoice_ref_xyz"
-    }
-  ],
-  "client_time": 1769500100
-}
-```
-
-### UnlockTask
-
-```json
-{
-  "task_id": "task_def456",
-  "lock_id": "lock_abc123",
-  "viewer": "pk:<viewer_z32>",
-  "status": "eligible",
-  "passed_criteria": ["crit_1"],
-  "failed_criteria": [],
-  "created_at": 1769500100,
-  "updated_at": 1769500120,
-  "expires_at": 1769500400
-}
-```
-
-Task status values: `pending` → `verifying` → `eligible` | `failed` | `expired`
-
-### UnlockAttestation (JWS payload)
-
-```json
-{
-  "iss": "pk:<guard_z32>",
-  "aud": "pk:<homeserver_z32>",
-  "jti": "att_ghi789",
-  "iat": 1769500120,
-  "exp": 1769500150,
-  "lock_id": "lock_abc123",
-  "task_id": "task_def456",
-  "viewer": "pk:<viewer_z32>",
-  "resource_guarded": "pubky://<creator_z32>/guarded/<app-id>/posts/<post-id>/payload.json",
-  "caps_requested": ["/guarded/<app-id>/posts/<post-id>/payload.json:r"],
-  "result": "eligible"
-}
-```
-
-JWS header: `{ "alg": "EdDSA", "typ": "pubky-locks-attestation" }`
-
-### UnlockTokenResponse
-
-```json
-{
-  "status": "ok",
-  "token": "<jwt_access_token>",
-  "session": {
-    "grant_id": "<grant_id>",
-    "token_expires_at": 1769503720,
-    "capabilities": ["/guarded/<app-id>/posts/<post-id>/payload.json:r"]
-  },
-  "issued_session_jti": "sess_jkl012",
-  "task_id": "task_def456"
-}
-```
-
-### Lock Signal (embedded in public metadata)
-
-```json
-{
-  "lock_id": "lock_abc123",
-  "types": ["payment"],
-  "amount": "50000",
-  "asset": "BTC",
-  "policy_uri": "pubky://<creator_z32>/pub/<app-id>/locks/policies/lock_abc123.json",
-  "guarded_uri": "pubky://<creator_z32>/guarded/<app-id>/posts/<post-id>/payload.json",
-  "guard_service_id": "pk:<guard_z32>",
-  "guard_service_url": "https://guard.example.com"
-}
-```
-
----
-
-## 9. API Surface
-
-### Guard Service (creator domain, `/locks/v1/*`)
-
-| Method | Route | Caller | Purpose |
-|---|---|---|---|
-| `GET` | `/locks/v1/policy?resource=<pubky-uri>` | Viewer | Fetch lock policy for a resource |
-| `GET` | `/locks/v1/challenge?lock_id=<lock-id>` | Viewer | Get password challenge (nonce + salt) |
-| `POST` | `/locks/v1/unlock_requests` | Viewer | Submit proof bundle, start async unlock task |
-| `GET` | `/locks/v1/unlock_requests/{task_id}` | Viewer | Poll unlock task status |
-| `POST` | `/locks/v1/unlock_requests/{task_id}/token` | Viewer | Exchange eligible task for scoped JWT |
-
-### Homeserver Management
-
-| Method | Route | Caller | Purpose |
-|---|---|---|---|
-| `PUT` | `/locks/v1/manage` | Creator | Create or update lock policy |
-| `DELETE` | `/locks/v1/manage?lock_id=<lock-id>` | Creator | Remove a lock |
-| `POST` | `/locks/v1/manage/password` | Creator | Set password material for a lock |
-
-### Homeserver Core (used by guard service)
-
-| Method | Route | Caller | Purpose |
-|---|---|---|---|
-| `POST` | `/session` | Guard (mTLS) | Session exchange with Grant + PoP + attestation |
-
----
-
-## 10. Threat Scenarios
-
-| Threat | Attack vector | Mitigation |
-|---|---|---|
-| **Attestation replay** | Attacker captures a valid UnlockAttestation JWS and replays it to the homeserver | `jti` one-time-use enforcement. `exp − iat ≤ 30s` limits the replay window. |
-| **Stolen JWT** | Attacker obtains a viewer's access token via interception or client compromise | Short TTL limits exposure. Scope is single-resource read only. Homeserver revocation terminates the session. TLS on all paths. |
-| **Compromised guard key** | Attacker gains control of the guard service's signing key | Can forge attestations for locks managed by that guard. Blast radius limited to one guard. Homeserver operators can revoke the guard public key. |
-| **Guard impersonation** | Rogue service attempts to issue attestations | mTLS mutual certificate verification. Homeserver pins guard public key against `guard_service_id` in the lock policy. |
-| **Scope escalation** | Viewer requests capabilities beyond the lock target (e.g., wildcard read) | Homeserver validates `caps_requested` against both the attestation and the Grant. Any mismatch is rejected. |
-| **Forged proof** | Viewer submits fabricated payment receipts or proof references | Guard verifies proofs against external sources (payment backends, oracles). Proofs are never self-attested. |
-| **Grant theft** | Attacker obtains a viewer's Grant JWS | Insufficient without the PoP private key (bound via `cnf` claim). Attacker cannot produce a valid PoP proof. |
-
----
-
-## 11. Operational Risks
-
-| Risk | Impact | Behavior / Mitigation |
-|---|---|---|
-| **Guard service downtime** | New unlocks cannot be processed | Existing JWTs remain valid until expiry. New unlock attempts fail closed. Viewers retry when guard recovers. |
-| **Homeserver downtime** | All content access fails (public and guarded) | Complete service interruption. Outside Locks scope; depends on homeserver availability. |
-| **Async verification timeout** | Long-running verification exceeds task `expires_at` | Task transitions to `expired`. Viewer creates a new unlock request. Idempotency key prevents duplicate payment charges. |
-| **Clock skew (guard ↔ homeserver)** | Attestation timestamp validation fails (`exp − iat` check rejects valid attestations) | NTP synchronization required on both sides. Small tolerance acceptable (seconds, not minutes). |
-| **mTLS certificate rotation** | Guard-to-homeserver trust breaks during rollover | Requires coordinated rotation with certificate overlap period. |
-| **Grant revocation mid-flow** | Grant revoked between proof submission and token exchange | Homeserver rejects session issuance. Viewer must obtain a new Grant from Ring and restart. |
-| **Duplicate payment submission** | Same payment proof submitted multiple times (retry, network error) | Idempotency key on unlock request creation. Repeated submissions return the same task status. |
-
----
-
-## 12. Alternative Approach: Viewer-Presented Attestations
-
-An alternative design was considered where the guard service issues attestations directly to the viewer, who then presents them to the homeserver to access guarded content. The guard-to-homeserver proxy hop is eliminated; the viewer becomes the attestation carrier.
-
-### How it would work
-
-```mermaid
-sequenceDiagram
-  participant V as Viewer App
-  participant G as Guard Service
-  participant H as Homeserver
-
-  V->>G: POST /locks/v1/unlock_requests
-  G-->>V: {task_id, status: "pending"}
-
-  loop Until eligible
-    V->>G: GET /locks/v1/unlock_requests/{task_id}
-    G-->>V: {status}
-  end
-
-  V->>G: POST /locks/v1/unlock_requests/{task_id}/attestation
-  G->>G: Sign UnlockAttestation (JWS)
-  G-->>V: {attestation: "<jws>"}
-
-  Note over V,H: Option A — attestation inline with content request
-  V->>H: GET /guarded/... [Attestation: <jws>]
-  H->>H: Verify attestation signature + claims
-  H-->>V: 200 guarded content
-
-  Note over V,H: Option B — attestation exchanged for JWT first
-  V->>H: POST /session [Attestation: <jws>]
-  H->>H: Verify attestation signature + claims
-  H-->>V: {token, session}
-  V->>H: GET /guarded/... [Bearer JWT]
-  H-->>V: 200 guarded content
-```
-
-Option A (inline) avoids extra round-trips but requires the homeserver to verify attestation signatures on every content request. Option B (exchange first) adds a round-trip but reuses the existing JWT session model. Neither variant offers a clear net benefit over the chosen proxy approach.
-
-### Why this approach was not chosen
-
-**a) Significant homeserver changes.** The homeserver would need a new authorization path — accepting and validating third-party attestations either inline on content requests or through a new exchange endpoint. The proxy approach requires no new homeserver authorization logic; it reuses the existing `POST /session` contract with mTLS as the only addition.
-
-**b) Premature signature verification dependency.** Validating guard-signed attestations at the homeserver requires introducing Ed25519 signature verification for third-party issuers — logic for proving and validating authorship of artifacts. No such proof-of-authorship mechanism exists in Pubky today; it is still at the proposal draft stage. Building attestation verification into the homeserver now means speculating on verification semantics that have not been finalized, risking rework when the authorship proposal matures.
-
-**c) Increased replay attack surface.** In the chosen approach, the attestation is created and consumed on a single mTLS-protected guard-to-homeserver hop — the viewer never handles it. In the alternative, the attestation travels through the viewer, who could replay it, leak it, or have it intercepted. While `jti` one-time-use and short `exp` windows mitigate this, the exposure window is wider and the attack surface is strictly larger than the server-to-server path.
