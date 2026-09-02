@@ -28,9 +28,11 @@ Locks is the authorization and commerce layer for the Pubky ecosystem. It lets c
 
 - Monetize content and features without custody or intermediaries
 - Keep locked resources discoverable (the lock itself is a signal of value)
+  > Question: What does it mean?
 - Work across apps and wallets, not only Synonym products
 - Support broader gating than simple paywalls (memberships, credentials, crowdfunding thresholds, proofs of work)
 - Fit the Atomic Economy stack without introducing centralized chokepoints
+  > Comment: At least now there will be centralized "gatekeepers"
 
 ### Non-goals
 
@@ -51,9 +53,15 @@ MVP uses an **honest gatekeeper** model:
 
 - The homeserver is trusted to run verifiers honestly and issue grants only when proofs satisfy the policy
 - The creator-signed policy constrains what the homeserver may do -- it cannot invent grants for policies it did not receive
+  > Comment: Should already solved in Sev's auth design
 - Grants bind to the policy hash, preventing substitution
+  > Question: Not sure I understand what exactly are we trying to prevent from substitution
+  > Comment: Cant if it will be implemented as "grants and policy" system.
+  The argument against this approach in the following example:
+    - We want to grant access via OpenTimestamp. Does it mean that OTS needs to implement grant signing system and maintain keys etc? This seems like high expectation and may cause heavy reliance on business developement. Alternatively we simply integrate OTS by polling their data from public API. This way all dev load is on us but things are exclusively under our control 
 - Idempotency prevents double-charging
 - Optional audit logs improve accountability
+  > Comment: Always good idea
 
 Do not market this as trustless. It is not. The creator trusts their homeserver to enforce their policy, the same way they already trust it to store and serve their data. This is a natural extension of the existing Pubky trust model, not a new trust assumption.
 
@@ -61,19 +69,23 @@ Do not market this as trustless. It is not. The creator trusts their homeserver 
 
 The Pubky key hierarchy (PUBKY_CRYPTO_SPEC v2.5) separates key roles:
 
-| Key | Custody | Locks role |
-|-----|---------|------------|
-| **RootKey** | Ring (semi-cold) | Identity anchor. Signs AppCerts only. |
-| **Content AppKey** | App (via AppCert) | Signs LockPolicies and other content objects. |
-| **Locks AppKey** | Homeserver (via AppCert) | Signs UnlockGrants on the creator's behalf. |
+| Key | Custody | Locks role | Comments / Questions |
+|-----|---------|------------|----------------------|
+| **RootKey** | Ring (semi-cold) | Identity anchor. Signs AppCerts only. | |
+| **Content AppKey** | App (via AppCert) | Signs LockPolicies and other content objects. | Is this app key of the app that creates locks? |
+| **Locks AppKey** | Homeserver (via AppCert) | Signs UnlockGrants on the creator's behalf. | This is homeserver's key as defined in Sev's auth doc|
 
 The delegation chain for **policy creation** is:
 
-1. Creator's RootKey issues an AppCert for a content AppKey (held by the app, e.g. Pubky App)
-2. The content AppKey signs LockPolicies during the normal publish flow
-3. Verifiers trace the chain: AppCert signed by RootKey → content AppKey signed the policy
+1. Creator's **RootKey** issues an **AppCert** for a **Content AppKey** (held by the app, e.g. Pubky App)
+2. The content **AppKey** signs **LockPolicies** during the normal publish flow
+  Maybe in the first iteration it is OK for policies not to be signed and simply stored under `/pub/policies` with the trust to homeserver that only authorized users can write there
+3. Verifiers trace the chain: **AppCert** signed by **RootKey** → content **AppKey** signed the policy
 
 The delegation chain for **grant issuance** is:
+  > Comment: Unsigned policies will also signifincalty simplify this.
+  > I suspect this and things like Key Bindings came from crypto PUBKY_CRYPTO_SPEC which has not yet been reviewed by anybody from pubky core team.
+  > Content signing (admittedly may be unrelated is not scheduled for implementation until EOY)
 
 1. Creator's RootKey issues an AppCert authorizing a `locks` AppKey held by the homeserver
 2. The `locks` AppKey is published in the creator's KeyBinding under `app_keys[]`
@@ -83,6 +95,7 @@ The delegation chain for **grant issuance** is:
 This keeps the RootKey semi-cold in Ring. The creator's app handles routine policy signing via content AppKey. The homeserver handles grant signing via its own delegated AppKey. Neither requires the RootKey to be hot. AppCerts can be scoped and time-limited. Revocation is achieved by publishing a new KeyBinding without the revoked AppKey.
 
 ### Grant validation rule
+  > Comment: See my previous comments on grants model
 
 A valid UnlockGrant must satisfy **both** conditions:
 
@@ -136,31 +149,40 @@ Layer B does not block MVP. It is future work that should be designed in paralle
 1. Creator publishes a resource (post, file, collection)
 2. Creator publishes a LockPolicy attached to that resource
 3. Creator publishes a lock presence signal on the resource metadata
+  > Comment: Note for myself. Data behind locks can not be stored in `/pub/`
+  > The event of lock being publised is a log presence signal
+  > Metadata content is an open question. Should it include previews etc?
 4. Viewer discovers the resource (via Nexus, feed, direct link)
 5. Viewer sees the lock indicator and fetches the LockPolicy
 6. Viewer obtains the required proofs (pays via wallet, enters password, etc.)
 7. Viewer submits a ProofBundle to the creator's homeserver
+  > Comment: Instead of sending proof, viewer can send location of proof. May be problematic in some cases.
 8. Homeserver evaluates proofs against the policy
+  > Comment: In the case suggested above HS will query for proof
 9. Homeserver issues an UnlockGrant signed with its delegated AppKey
+  > Comment: In the case above HS needs to immediately reply with something like task id to not block viewer then viewer will poll by it to get result
 10. Viewer presents the grant to access the guarded resource
 ```
 
 ### 4.3 Guarded data
 
 Locks introduces a guarded access state on resources. **Guarded is an access-control state on public-addressable resources, not a third filesystem namespace.** There is no `/guarded/` path prefix.
+  > Question: Not sure why this is necessary.
 
-| State | Who can read | Path |
-|-------|-------------|------|
-| **Public** | Anyone | `/pub/...` |
-| **Guarded** | Anyone with a valid UnlockGrant | `/pub/...` (same namespace, grant-required flag set) |
-| **Private** | Only the owner | `/priv/...` |
+| State | Who can read | Path | Commnet |
+|-------|-------------|------|----------|
+| **Public** | Anyone | `/pub/...` | |
+| **Guarded** | Anyone with a valid UnlockGrant | `/pub/...` (same namespace, grant-required flag set) | Implementing this may be too much for homeserver, better store in `/guarded/` or similar |
+| **Private** | Only the owner | `/priv/...` | |
 
 Guarded data lives under `/pub/` (so it is addressable and discoverable) but the homeserver requires a valid grant header before serving the full payload. The preview/teaser portion of a guarded resource is always public. The guarded portion is withheld until a grant is presented.
+  > Comment: I am affraid this complicates implementation signifficantly. I think having preview and lock in `/pub/` while the content itself in `/guarded` is easier to implement without risks of sacrificing any functionality  
 
 Implementation note: the homeserver enforces this at the HTTP layer. A request for a guarded resource without a valid `Authorization: PubkyGrant <base64url-grant>` header receives:
 
 - `402 Payment Required` -- when at least one criterion in the policy is type `payment` or `crowdwall`
 - `403 Forbidden` -- when the lock is password-only, tag-only, or otherwise non-payment
+ > Comment: I think it is better to stay with one type of error. For example if there is a complex lock where both payment and tag are needed it should return 403, therefore 402 is redundant
 
 Both responses include the policy URI in a `Link: <policy-uri>; rel="lock-policy"` header so the client can fetch the policy and determine how to unlock.
 
@@ -289,6 +311,7 @@ Each criterion defines one condition that can be satisfied by a proof.
 
 `amount` is a string representation of the value in the base unit of `asset`. `asset` identifies the denomination (v1 implementations validate `BTC` only, per BIP 177 where 1 bitcoin is the base indivisible unit; the schema supports future extension). `receipt_window_sec` defines how old a receipt can be when submitted. `merchant` is the payee's pubkey -- the homeserver verifies the receipt was paid to this key.
 
+  > Comment: I am not sure if enforcing receipt_window_sec is a good idea. It seems to bring little value but many footguns. It definitely needs to be big.
 **Password criterion:**
 
 ```json
@@ -348,6 +371,8 @@ The logic tree combines criteria using boolean operators. v1 supports `ANY` (OR)
   ]
 }
 ```
+
+ > Comment: With 402 and 403 will lead to bad error codes experience if `op` is `"ALL"`
 
 Nested example (v2):
 
@@ -443,6 +468,8 @@ The homeserver's response after successful verification.
 
 ### 7.4 Grant presentation (Proof of Possession)
 
+> Comment: Significantly simpler without Grant system
+
 When `mode` is `"pop"`, the viewer must prove they control the `subject` key when presenting the grant. The presentation is an HTTP header:
 
 ```
@@ -523,6 +550,8 @@ On `RECEIPT_REPLAY`, the homeserver returns the original grant (or a refreshed g
 
 Locked content must be discoverable. The lock itself is a signal of value.
 
+> Not sure how to understand this
+
 ### 8.1 Resource-level lock metadata
 
 When a creator attaches a lock to a resource, the resource's public metadata includes a lock signal:
@@ -546,6 +575,17 @@ This object is small enough to inline in a post's metadata without bloating feed
 - Display price information
 - Enable "locked content" discovery feeds
 
+> Comment: Now I understand why you suggested filestructure approach you did. Elegant wision but I am not sure if feasible.
+
+> In almost all cases of PubkyAppSpec Objects data and metadata are in the same file. Exception is File and Blob types. Futhere if they are are stored together they will be retrieved together thus lock is not realy enforcable
+
+> Many reasons why `/pub/` folder for data will not work or will be unreasonably hard to implement
+ 
+> Locks will most probably require new pubky objects for good in app representation
+
+> Another approach we have had considered was to keep previews app specific. While content general. This will end looking for user as following:
+> - public post with all content being publick on the pubky app with link to locked content in it. This however may result in less "magical ux with auto unlock" where locked content to be shown will require "extra click" from user to open it instead of "auto-open" content while scrolling feed. This way things can be done without changes on app, nexus etc and "auto open" could be added to nexus later. Not sure if I am describing things clearly enough.
+
 ### 8.2 Preview and payload separation
 
 Following the pattern from Fanfares: locked resources should separate preview content from guarded content as distinct objects.
@@ -553,12 +593,14 @@ Following the pattern from Fanfares: locked resources should separate preview co
 For a locked post:
 
 - **Preview** (always public): title, excerpt, author, tags, lock metadata, thumbnail
+> Comment: as above, preview is aoo soecific while locked content is general.
 - **Payload** (guarded): full body, media, attachments
 
 The preview is a complete, renderable object. It is not a stub or placeholder. A feed of locked posts should look rich and intentional, not like a wall of padlocks.
 
 Implementation: the app stores preview data at the resource's public path and guarded data at a suffixed path (e.g., `/pub/<app-id>/posts/<id>/preview.json` and `/pub/<app-id>/posts/<id>/payload.json`). The homeserver applies grant-required gating only to the payload path.
 
+> Question based on flow described in above, if user is "qualified" for unlock of the content should the content be redenderd on feed or should it still be a preview?
 ---
 
 ## 9. Receipt binding and replay control
@@ -566,6 +608,8 @@ Implementation: the app stores preview data at the resource's public path and gu
 ### 9.1 Lock commitment
 
 When a wallet pays a Locks-initiated payment, it embeds a `lock_commitment` in the Paykit receipt metadata. This binds the receipt to a specific lock and prevents cross-lock replay.
+
+> Comment: in case of grant polling, this will be solved like this: server creates `ref` and shres it with payee who after paying invoices shares `ref` with guard/homeserver who will poll server with this `ref` to see if corresponding invoice was paid
 
 **Construction:**
 
@@ -595,6 +639,8 @@ If the receipt lacks a `lock_commitment`, the homeserver MAY accept it in v1 for
 ### 9.2 Idempotency
 
 Idempotency is primarily a concern for **payment proofs**, where double-charging is unacceptable.
+
+> Comment: I believe this should not be a concert in case of grant-polling
 
 **Payment idempotency key:**
 
@@ -655,6 +701,7 @@ For Pubky App v1, the suggested paths are:
 | Password store | Homeserver internal DB | Never exposed |
 
 These are implementation paths for Pubky App, not protocol identity. Other apps building on Locks use their own path conventions. The protocol boundary is the API (section 12), not the filesystem.
+  > Comment: This will require different treatment of locked posts and not locked posts by nexus. Needs to be discussed with nexus team
 
 ### 10.2 Indexer behavior
 
@@ -672,6 +719,7 @@ Indexers MUST NOT index:
 - Password attempts
 - Audit logs
 
+  > Comment: This implies that there is no auto-unlock within feed, because feed and its content is assembed by nexus
 ---
 
 ## 11. Wallet integration
@@ -736,6 +784,8 @@ The deep link scheme (`bitkit://pay`) is Bitkit-specific. Other wallets register
 ## 12. API
 
 All Locks API endpoints live under `/.well-known/locks/` on the creator's homeserver. This is a service endpoint, not a data path.
+
+  >  Comment: I am not really sure about this. Such approach is not really consistent with current homeserver dev ex and as a result might be suboptimal
 
 ### 12.1 Get policy
 
@@ -874,6 +924,8 @@ Locked content is visible in feeds and search. The lock indicator shows the lock
 
 The entire unlock flow should complete in under 10 seconds for Lightning payments. If it takes longer, the UX is broken.
 
+  > Comment: I think that goal should be zero interaction unlock. I think it can be possible with something like "nexus pulling proofs from viewer homeserver and data from creators homeservers." Not saying that this should be MVP but knowing end goal may help chosing architectural approach. Privacy considerations are important in this case.
+
 ### 13.2 Creator experience
 
 A creator locks content through the app's publish flow:
@@ -885,6 +937,8 @@ A creator locks content through the app's publish flow:
 5. The app publishes the policy and updates the resource metadata with the lock signal
 6. The app sets the guarded data flag on the payload path
 
+  > The flow as it is written above implies that contet is posted before lock which means that it will actually be visible and accessible before lock is posted. This is by pubky's design. Lock should be posted before content
+
 ### Lock editing semantics
 
 A `lock_id` is immutable per lock instance. Edits fall into two categories:
@@ -892,7 +946,11 @@ A `lock_id` is immutable per lock instance. Edits fall into two categories:
 - **Material edits** (changes to `criteria`, `logic`, `grant_issuers`, `grant_mode`, or `grant_ttl_sec`) create a **new lock instance** with a new `lock_id`. The old lock is removed. Existing grants for the old policy cannot be refreshed and expire naturally. Old receipts cannot satisfy the new lock -- they are bound to the old `lock_id` via `lock_commitment`, and the new `lock_id` produces a different commitment. The viewer must pay again for the new lock. Creators should avoid material edits to paid locks. If grandfathering is needed (honoring old receipts after a policy change), that is application logic, not protocol logic.
 - **Non-material edits** (changes to `preview`, `expires_at`, or extension fields) update the policy **in place** with the same `lock_id`. The `policy_hash` changes, so grant refresh will fail until viewers re-verify, but no new `lock_id` is needed and existing receipts remain valid.
 
+  > Separation of locks and previews (as described above where previews are app specific) will impact this. 
+
 ### 13.3 Grant lifecycle
+
+  > May be impacted by two previously mentioned types: a) proofs polled by app/its backed from ownsers HS, b) proofs polled from remote "orables"
 
 - Apps cache active grants locally (encrypted local storage)
 - Apps attempt grant refresh at 80% of TTL
@@ -931,6 +989,8 @@ This is the "Atomic Engine" quarter per the 2026 roadmap. The goal is the first 
 
 ### Phase 2: Memberships and social commerce (Q3 2026)
 
+  > Comment: tags might be easier to ship at least because nexus is ready while paykit server has not even started
+
 Ship:
 
 - Tag credentials (issuer-signed membership tokens)
@@ -942,6 +1002,8 @@ Ship:
 This is the "Enter The Arena" quarter. Tags and memberships connect Locks to the semantic social graph.
 
 ### Phase 3: Richer conditions (Q4 2026)
+
+  > Same as above
 
 Ship:
 
@@ -1021,6 +1083,8 @@ Together these provide sufficient assurance for the honest-gatekeeper model: the
 
 **v2 direction:** Paykit should introduce signed receipts (signed by the payer's wallet key) to strengthen the chain. This would allow the homeserver to independently verify that the claimed payer actually authorized the payment, without relying solely on the ProofBundle signature. This is a Paykit-level change, not a Locks-level change.
 
+  > Comment: Paykit receipts should be designed separately but paykit's noise messages are cryptographically verifiable so could be enough. In the end what needs to be proofed and to whom? The only necessary thing for payment is payer needs to be able to proof to payee that payment has been made. Everything else is just roundtrips with different trust models can they be necessary or desired - yes. But they should be added only out of necessity when proven impossible otherwise
+
 ### 15.5 No Paykit library dependency required
 
 The homeserver does not need `paykit-lib` to verify receipts. Receipt verification is:
@@ -1033,6 +1097,8 @@ The homeserver does not need `paykit-lib` to verify receipts. Receipt verificati
 - Optional HTTP call (for on-chain confirmation)
 
 This keeps the homeserver's dependency footprint minimal.
+
+  > Comment: see comment above
 
 ---
 
@@ -1049,6 +1115,8 @@ LockPolicies are signed by the creator's content AppKey (traceable to their Root
 3. The creator publishes an updated KeyBinding with the new AppKey
 4. `grant_issuers` in the policy is updated to include Homeserver B's AppKey
 5. Old grants (signed by A's AppKey) expire naturally (they are time-bounded)
+
+  > Comment: I am not convinced that policies need to be signed
 
 ### 16.2 Viewer impact
 
@@ -1172,6 +1240,8 @@ During migration, viewers with active grants can continue using them until expir
 ---
 
 ## 18. Open questions
+
+  > Comment: there are more since implementation approach is not exactly chosen
 
 These are genuinely open and should be resolved during Deliverable 1:
 
