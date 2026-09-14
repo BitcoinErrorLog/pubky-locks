@@ -534,10 +534,12 @@ When a creator attaches a lock to a resource, the resource's public metadata inc
     "types": ["payment"],
     "amount": "50000",
     "asset": "BTC",
-    "policy_uri": "pubky://<z32>/pub/<app-id>/locks/policies/<lock_id>.json"
+    "policy_uri": "pubky://<z32>/pub/app.locks/v1/locks/policies/<lock_id>.json"
   }
 }
 ```
+
+Namespace follows the pubky-social-specs app-namespace convention (reversed domain, versioned epoch).
 
 This object is small enough to inline in a post's metadata without bloating feeds. Indexers (Nexus) can index the `lock` field to:
 
@@ -647,11 +649,11 @@ For Pubky App v1, the suggested paths are:
 
 | Object | Path | Access |
 |--------|------|--------|
-| LockPolicy | `/pub/<app-id>/locks/policies/<lock_id>.json` | Public |
+| LockPolicy | `/pub/app.locks/v1/locks/policies/<lock_id>.json` | Public |
 | Preview | `/pub/<app-id>/posts/<id>/preview.json` | Public |
 | Guarded payload | `/pub/<app-id>/posts/<id>/payload.json` | Guarded (grant required) |
-| Revocation list | `/pub/<app-id>/locks/revocations.json` | Public |
-| Audit log | `/priv/<app-id>/locks/audit/<lock_id>.jsonl` | Private (creator only) |
+| Revocation list | `/pub/app.locks/v1/locks/revocations.json` | Public |
+| Audit log | `/priv/app.locks/v1/locks/audit/<lock_id>.jsonl` | Private (creator only) |
 | Password store | Homeserver internal DB | Never exposed |
 
 These are implementation paths for Pubky App, not protocol identity. Other apps building on Locks use their own path conventions. The protocol boundary is the API (section 12), not the filesystem.
@@ -703,7 +705,7 @@ bitkit://pay?locks=<base64url-encoded-request>
 For requests that would exceed URL length limits (unlikely for v1 but possible with extension fields), the app writes the request to a temporary homeserver path and passes a reference:
 
 ```
-bitkit://pay?locks_ref=pubky://<z32>/pub/<app-id>/locks/requests/<request_id>.json
+bitkit://pay?locks_ref=pubky://<z32>/pub/app.locks/v1/locks/requests/<request_id>.json
 ```
 
 ### 11.2 Wallet responsibilities
